@@ -1,0 +1,5 @@
+node_modules/
+.env
+*.log
+progress.json
+conversation-state.json
