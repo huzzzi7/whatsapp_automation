@@ -2,10 +2,14 @@
  * Entry: read Excel → build user list → attach message sequences → send (or dry-run).
  * Usage: node index.js [--dry-run]
  */
+const { PrismaClient } = require('@prisma/client');
 const config = require('./config');
 const { readExcel } = require('./src/excel');
 const { buildSequence } = require('./src/messages');
 const { sendAllUsers } = require('./src/send');
+const { resolveGreenApiConfig } = require('./src/greenInstance');
+
+const prisma = new PrismaClient();
 
 const isDryRun = process.argv.includes('--dry-run');
 
@@ -42,9 +46,19 @@ async function main() {
     return;
   }
 
-  // 3. Send all users via GreenAPI with delays
+  // 3. Send all users via GreenAPI with delays (first Green instance in DB)
   try {
-    await sendAllUsers(users, config);
+    const row = await prisma.greenInstance.findFirst({ orderBy: { createdAt: 'asc' } });
+    if (!row) {
+      console.error('No GreenInstance in database. Add one in Settings (dashboard) or run prisma db seed.');
+      process.exit(1);
+    }
+    const greenApi = resolveGreenApiConfig(row);
+    await sendAllUsers(users, {
+      greenApi,
+      delays: config.delays,
+      messageTemplates: config.messageTemplates,
+    });
     console.log('Send run finished.');
   } catch (err) {
     console.error('Send run failed:', err.message);
@@ -52,4 +66,4 @@ async function main() {
   }
 }
 
-main();
+main().finally(() => prisma.$disconnect());

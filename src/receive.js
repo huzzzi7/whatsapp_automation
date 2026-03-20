@@ -2,22 +2,32 @@
  * Parse GreenAPI incoming notifications (webhook or polling payload).
  * Only processes incomingMessageReceived; ignores status and outgoing.
  */
+const config = require('../config');
+const { normalizePhone, toChatId } = require('./phone');
+
 function parseIncomingNotification(body) {
   if (!body || typeof body !== 'object') return null;
   const payload = body.body || body;
+
   if (payload.typeWebhook !== 'incomingMessageReceived') {
-    console.log('[Webhook] Ignored webhook type:', payload.typeWebhook);
+    console.log('[Webhook] Ignored type:', payload.typeWebhook);
     return null;
   }
 
-  const senderData = payload.senderData;
-  if (!senderData || !senderData.chatId) return null;
+  if (!payload.senderData?.chatId) {
+    console.log('[Webhook] Missing chatId');
+    return null;
+  }
 
-  const rawChatId = String(senderData.chatId).trim();
-  console.log('[Webhook] chatId received:', rawChatId);
-  const phone = rawChatId.replace(/@c\.us$/i, '').replace(/\D/g, '');
-  if (!phone) return null;
-  const chatId = phone + '@c.us';
+  const rawChatId = String(payload.senderData.chatId).trim();
+  console.log('[Webhook] Raw chatId:', rawChatId);
+
+  const digits = rawChatId.replace(/@c\.us$/i, '').replace(/\D/g, '');
+  const normalized = normalizePhone(digits, config.defaultCountryCode);
+  if (!normalized) {
+    console.log('[Webhook] Empty phone after normalize');
+    return null;
+  }
 
   let text = '';
   const messageData = payload.messageData || {};
@@ -25,7 +35,7 @@ function parseIncomingNotification(body) {
     text = messageData.textMessageData.textMessage || '';
   }
 
-  return { phone, chatId, text };
+  return { phone: normalized, chatId: toChatId(normalized), text };
 }
 
 module.exports = { parseIncomingNotification };

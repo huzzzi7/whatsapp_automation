@@ -1,6 +1,6 @@
 /**
- * Conversation state: persist progress per phone (lastSentIndex, sequence, campaignId).
- * Stored in conversation-state.json at project root.
+ * Conversation state: persist progress per (greenInstanceDbId, phone).
+ * Keys: `${greenInstanceDbId}:${phone}` — stored in conversation-state.json.
  */
 const fs = require('fs');
 const path = require('path');
@@ -9,10 +9,13 @@ const STATE_FILE = path.join(__dirname, '..', 'conversation-state.json');
 
 let _state = null;
 
-/**
- * Load state from disk. Creates file with {} if missing.
- * @returns {Object} State object keyed by phone
- */
+function makeStateKey(greenInstanceDbId, phone) {
+  const id = String(greenInstanceDbId || '').trim();
+  const p = String(phone || '').trim();
+  if (!id || !p) return '';
+  return `${id}:${p}`;
+}
+
 function loadState() {
   if (_state !== null) return _state;
   try {
@@ -29,65 +32,74 @@ function loadState() {
   return _state;
 }
 
-/**
- * Write state to disk. Call after any change.
- */
 function saveState() {
   const state = _state !== null ? _state : loadState();
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
 }
 
 /**
- * Get state for a phone number (normalized digits).
+ * @param {string} greenInstanceDbId - Prisma GreenInstance.id
  * @param {string} phone - Normalized phone
- * @returns {Object|null} { lastSentIndex, sequence, campaignId } or null
  */
-function getState(phone) {
+function getState(greenInstanceDbId, phone) {
   const state = loadState();
-  const key = String(phone || '').trim();
+  const key = makeStateKey(greenInstanceDbId, phone);
   if (!key) return null;
   return state[key] != null ? state[key] : null;
 }
 
 /**
- * Set full state for a phone. Persists immediately.
- * @param {string} phone - Normalized phone
- * @param {Object} data - { lastSentIndex, sequence, campaignId? }
+ * @param {string} greenInstanceDbId
+ * @param {string} phone
+ * @param {{ lastSentIndex: number, sequence: string[], campaignId?: string }} data
  */
-function setState(phone, data) {
+function setState(greenInstanceDbId, phone, data) {
   const state = loadState();
-  const key = String(phone || '').trim();
+  const key = makeStateKey(greenInstanceDbId, phone);
   if (!key) return;
   state[key] = data;
   saveState();
 }
 
 /**
- * Update only lastSentIndex for a phone. Preserves sequence and campaignId.
- * @param {string} phone - Normalized phone
- * @param {number} newIndex - New lastSentIndex (1..6)
+ * @param {string} greenInstanceDbId
+ * @param {string} phone
+ * @param {number} newIndex
  */
-function updateLastSent(phone, newIndex) {
+function updateLastSent(greenInstanceDbId, phone, newIndex) {
   const state = loadState();
-  const key = String(phone || '').trim();
+  const key = makeStateKey(greenInstanceDbId, phone);
   if (!key || state[key] == null) return;
   state[key].lastSentIndex = newIndex;
   saveState();
 }
 
 /**
- * Clear all conversation state (for test reset). Resets in-memory cache and file.
+ * Remove conversation state for one (instance, phone) pair.
+ * @param {string} greenInstanceDbId
+ * @param {string} phone - Normalized phone
  */
+function deleteState(greenInstanceDbId, phone) {
+  const st = loadState();
+  const key = makeStateKey(greenInstanceDbId, phone);
+  if (!key) return;
+  if (st[key] == null) return;
+  delete st[key];
+  saveState();
+}
+
 function resetState() {
   _state = {};
   saveState();
 }
 
 module.exports = {
+  makeStateKey,
   loadState,
   saveState,
   getState,
   setState,
   updateLastSent,
+  deleteState,
   resetState,
 };

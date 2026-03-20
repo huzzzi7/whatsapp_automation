@@ -14,7 +14,7 @@ const axios = require('axios');
 async function sendMessage(chatId, text, greenApiConfig) {
   const { instanceId, apiToken, baseUrl } = greenApiConfig;
   if (!instanceId || !apiToken) {
-    throw new Error('GreenAPI config missing: GREENAPI_INSTANCE and GREENAPI_TOKEN must be set in .env');
+    throw new Error('GreenAPI config missing: instanceId and apiToken are required (configure a Green instance in Settings)');
   }
 
   const url = `${baseUrl}/waInstance${instanceId}/sendMessage/${apiToken}`;
@@ -45,7 +45,7 @@ async function sendMessage(chatId, text, greenApiConfig) {
 async function receiveNotification(greenApiConfig, receiveTimeout = 5) {
   const { instanceId, apiToken, baseUrl } = greenApiConfig;
   if (!instanceId || !apiToken) {
-    throw new Error('GreenAPI config missing: GREENAPI_INSTANCE and GREENAPI_TOKEN must be set in .env');
+    throw new Error('GreenAPI config missing: instanceId and apiToken are required (configure a Green instance in Settings)');
   }
   const url = `${baseUrl}/waInstance${instanceId}/receiveNotification/${apiToken}?receiveTimeout=${receiveTimeout}`;
   try {
@@ -68,7 +68,7 @@ async function receiveNotification(greenApiConfig, receiveTimeout = 5) {
 async function deleteNotification(receiptId, greenApiConfig) {
   const { instanceId, apiToken, baseUrl } = greenApiConfig;
   if (!instanceId || !apiToken) {
-    throw new Error('GreenAPI config missing: GREENAPI_INSTANCE and GREENAPI_TOKEN must be set in .env');
+    throw new Error('GreenAPI config missing: instanceId and apiToken are required (configure a Green instance in Settings)');
   }
   const url = `${baseUrl}/waInstance${instanceId}/deleteNotification/${apiToken}/${receiptId}`;
   try {
