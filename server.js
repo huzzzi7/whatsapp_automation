@@ -28,6 +28,8 @@ const { createJob, getJob, runCampaignJob } = require('./src/campaignJobs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
+const cookieSecure = process.env.SESSION_COOKIE_SECURE === 'true' || isProduction;
+const sameSite = (process.env.SESSION_COOKIE_SAMESITE || 'lax').toLowerCase();
 
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
   .split(',')
@@ -148,15 +150,20 @@ app.post(
 );
 
 app.use(express.json({ limit: '5mb' }));
+
+if (process.env.TRUST_PROXY === 'true') {
+  app.set('trust proxy', 1);
+}
+
 app.use(
   session({
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: true,
+      secure: cookieSecure,
       httpOnly: true,
-      sameSite: 'lax',
+      sameSite,
       maxAge: 24 * 60 * 60 * 1000,
     },
   })
