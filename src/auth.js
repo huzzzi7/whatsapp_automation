@@ -1,5 +1,5 @@
 require('dotenv').config();
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const prisma = require('./db');
 
 async function validateCredentials(email, password) {
