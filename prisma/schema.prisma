@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -29,7 +29,7 @@ model CampaignLog {
   clientCampaignId    String
   totalUsers          Int
   totalUniversities   Int
-  universityStats     String
+  universityStats     String   @db.Text
   createdAt           DateTime @default(now())
 }
 

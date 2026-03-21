@@ -1,39 +1,40 @@
-# Prisma — production database (Hostinger / VPS)
+# Prisma — MySQL (Hostinger / production)
 
-## Error: `The table main.User does not exist`
-
-`main` is SQLite’s default schema. Prisma is connected, but **no tables were created yet**. Apply the schema with `db push` on the **same machine** where the app runs, using the **same `DATABASE_URL`** as in `.env`.
+The project uses **MySQL** (`prisma/schema.prisma` → `provider = "mysql"`).
 
 ---
 
-## 1. Verify `DATABASE_URL` on the server
+## 1. `DATABASE_URL`
 
-This project uses **SQLite** (`prisma/schema.prisma` → `provider = "sqlite"`).
-
-In `.env` (production):
+Set in `.env` (local) and in your **hosting panel** (production):
 
 ```env
-# Path is relative to the process working directory when Node starts (often project root).
-DATABASE_URL="file:./prisma/dev.db"
-
-# Or a dedicated file:
-# DATABASE_URL="file:./data/app.db"
+# URL-encode special characters in the password.
+DATABASE_URL="mysql://USER:PASSWORD@HOST:3306/DATABASE?sslaccept=strict"
 ```
 
-- Ensure the directory exists and is **writable** by the Node process.
-- If you use **MySQL** from Hostinger instead of SQLite, you must change `provider` in `schema.prisma` to `mysql` and use a MySQL `DATABASE_URL` — this doc assumes **SQLite** as in the repo.
+Use the credentials from **hPanel → Databases → MySQL** (or your provider’s equivalent).
+
+**Local dev:** Your `.env` must use a `mysql://` URL — Prisma will not validate with `file:`. Point at a local MySQL instance or a tunnel to Hostinger.
 
 ---
 
-## 2. Push schema (creates tables — safe on empty DB)
+## 2. Apply schema (create tables)
 
-SSH into the server, go to the app root (where `package.json` and `prisma/` live), then:
+**Option A — shell**
 
 ```bash
 npx prisma db push
+npx prisma generate
 ```
 
-This creates `User`, `ConversationState`, `CampaignLog`, `GreenInstance`, etc., without using migrations.
+**Option B — Node (no interactive terminal)**
+
+```bash
+npm run db:push:node
+```
+
+This runs `src/dbSetup.js`, which executes `prisma db push` for you.
 
 ---
 
@@ -43,42 +44,32 @@ This creates `User`, `ConversationState`, `CampaignLog`, `GreenInstance`, etc., 
 npx prisma generate
 ```
 
-`npm install` can also run `prisma generate` if you use the `postinstall` script in `package.json`.
+`npm install` runs `postinstall` → `prisma generate` automatically.
 
 ---
 
-## 4. Create admin user (empty DB)
-
-With `.env` loaded (same `DATABASE_URL`):
+## 4. Admin + optional seed
 
 ```bash
 npm run create-admin
+npx prisma db seed
 ```
-
-Or:
-
-```bash
-node prisma/create-admin.js
-```
-
-Adjust credentials in `prisma/create-admin.js` or set env vars if you extend the script.
 
 ---
 
 ## 5. Restart the app
 
-Restart Node (PM2, Passenger, Hostinger panel, etc.) so the new DB file and client are used.
+Restart Node (PM2, Hostinger app manager, etc.) after env and schema changes.
 
 ---
 
-## One-liner (after `git pull` / deploy)
+## One-liner (after `git pull`)
 
 ```bash
 npm ci
-npx prisma db push
-npx prisma generate
+npm run db:push:node
 npm run create-admin
-# restart your Node process
+# restart Node
 ```
 
 ---
@@ -87,12 +78,19 @@ npm run create-admin
 
 | Issue | What to check |
 |--------|----------------|
-| Still “table does not exist” | Wrong cwd → `DATABASE_URL` points to a different file than the running app. Use absolute path: `file:/var/www/.../prisma/dev.db` |
-| `EPERM` on Windows during `generate` | Stop `node` / `npm run server` so Prisma can overwrite `query_engine` DLL, then run `npx prisma generate` again |
-| MySQL URL with this schema | Won’t work until `schema.prisma` uses `provider = "mysql"` and URLs match |
+| `P1012` / URL must start with `mysql://` | Update `.env` `DATABASE_URL` to a MySQL URL (not `file:`). |
+| SSL / connection refused | Try `?sslaccept=strict` or host-specific SSL params from Hostinger docs. |
+| `EPERM` on Windows during `generate` | Stop `npm run server` / Node so Prisma can replace `query_engine` DLL. |
+| Old SQLite `dev.db` | Safe to delete locally after MySQL works; not used when `provider = mysql`. |
 
 ---
 
-## Why `db push` and not `migrate`?
+## Migrations folder
 
-On shared hosting, `migrate` needs migration history and care with prod DBs. **`db push`** syncs `schema.prisma` → database and is appropriate for an **empty** database and quick deploys.
+SQLite migration SQL was removed. Use **`db push`** (or create new MySQL migrations later). See `prisma/migrations/README.md`.
+
+---
+
+## Why `db push` first?
+
+For an empty production DB, **`prisma db push`** syncs `schema.prisma` quickly. You can introduce **`prisma migrate`** later for versioned changes.
