@@ -10,7 +10,11 @@
     "start": "node server.js",
     "dry-run": "node index.js --dry-run",
     "server": "node server.js",
-    "create-admin": "node prisma/create-admin.js"
+    "create-admin": "node prisma/create-admin.js",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "db:setup": "prisma db push && prisma generate",
+    "postinstall": "prisma generate"
   },
   "engines": {
     "node": ">=18"
