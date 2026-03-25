@@ -1,4 +1,4 @@
-# Hostinger Deployment Notes
+# Hostinger / production deployment
 
 ## Install
 
@@ -6,22 +6,18 @@
 npm install
 ```
 
-## Prisma
+## MySQL
 
-```bash
-npx prisma generate
-npx prisma db push
-```
+1. Create a database and import the schema from `db.sql` (phpMyAdmin or `mysql` CLI).
+2. Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` in `.env`.
 
 ## Admin user
-
-Creates/updates `jonny@ultimatefreshersevents.com` (ADMIN, bcrypt password):
 
 ```bash
 npm run create-admin
 ```
 
-Or: `npx prisma db seed` (also runs admin creation + optional Green API seed).
+Creates `admin@gmail.com` with password `admin123` (change after first login).
 
 ## Start
 
@@ -32,5 +28,5 @@ npm start
 ## Notes
 
 - Ensure Node >= 18.
-- Enable SSL before login testing.
-- Set environment variables in Hostinger panel.
+- Use HTTPS in production; set session cookie options accordingly.
+- Set environment variables in your hosting panel.

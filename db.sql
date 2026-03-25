@@ -1,0 +1,27 @@
+CREATE TABLE users (
+  id VARCHAR(50) PRIMARY KEY,
+  name VARCHAR(255) DEFAULT '',
+  email VARCHAR(255) UNIQUE,
+  passwordHash VARCHAR(255),
+  role VARCHAR(50) DEFAULT 'USER',
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE green_instances (
+  id VARCHAR(50) PRIMARY KEY,
+  name VARCHAR(255),
+  phoneNumber VARCHAR(50),
+  greenInstanceId VARCHAR(100),
+  apiToken VARCHAR(255),
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE campaign_logs (
+  id VARCHAR(50) PRIMARY KEY,
+  clientCampaignId VARCHAR(255),
+  totalUsers INT,
+  totalUniversities INT,
+  universityStats TEXT,
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+);

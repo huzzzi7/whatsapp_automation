@@ -1,9 +1,9 @@
 /**
  * Shared Green API webhook processing: parse notification, route test vs prod reply flow.
  * @param {Buffer} rawBuffer
- * @param {string} greenInstanceDbId - Prisma GreenInstance.id
+ * @param {string} greenInstanceDbId - green_instances.id
  */
-const prisma = require('./db');
+const pool = require('./mysql');
 const { parseIncomingNotification } = require('./receive');
 const { onIncomingReply, onIncomingReplyTest } = require('./replyFlow');
 const { resolveGreenApiConfig } = require('./greenInstance');
@@ -13,7 +13,8 @@ const testState = require('./testState');
 async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Instance:', greenInstanceDbId);
 
-  const row = await prisma.greenInstance.findUnique({ where: { id: greenInstanceDbId } });
+  const [rows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [greenInstanceDbId]);
+  const row = rows[0];
   if (!row) {
     console.error('[Webhook] Unknown greenInstanceDbId:', greenInstanceDbId);
     return;
@@ -68,19 +69,21 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
 }
 
 /**
- * Map Green API webhook JSON to Prisma GreenInstance.id using instanceData.idInstance.
+ * Map Green API webhook JSON to green_instances.id using instanceData.idInstance.
  * @param {object|null} body - parsed top-level webhook body
  * @returns {Promise<string|null>}
  */
-async function resolvePrismaIdFromWebhookBody(body) {
+async function resolveGreenInstanceDbIdFromWebhookBody(body) {
   if (!body || typeof body !== 'object') return null;
   const payload = body.body || body;
   const idInstance = payload?.instanceData?.idInstance;
   if (idInstance == null) return null;
-  const row = await prisma.greenInstance.findFirst({
-    where: { greenInstanceId: String(idInstance) },
-  });
+  const [rows] = await pool.execute(
+    'SELECT id FROM green_instances WHERE greenInstanceId = ? LIMIT 1',
+    [String(idInstance)],
+  );
+  const row = rows[0];
   return row ? row.id : null;
 }
 
-module.exports = { processGreenApiWebhook, resolvePrismaIdFromWebhookBody };
+module.exports = { processGreenApiWebhook, resolveGreenInstanceDbIdFromWebhookBody };

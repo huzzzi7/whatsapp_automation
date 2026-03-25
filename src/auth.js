@@ -1,15 +1,16 @@
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
-const prisma = require('./db');
+const pool = require('./mysql');
 
 async function validateCredentials(email, password) {
   if (!email || !password) return false;
 
-  const user = await prisma.user.findUnique({
-    where: { email: String(email).trim().toLowerCase() },
-  });
+  const normalized = String(email).trim().toLowerCase();
+  const [rows] = await pool.execute('SELECT * FROM users WHERE email = ? LIMIT 1', [normalized]);
 
-  if (!user) return false;
+  if (rows.length === 0) return false;
+
+  const user = rows[0];
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   return valid ? user : false;

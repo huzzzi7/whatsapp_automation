@@ -38,7 +38,7 @@ function saveState() {
 }
 
 /**
- * @param {string} greenInstanceDbId - Prisma GreenInstance.id
+ * @param {string} greenInstanceDbId - green_instances.id
  * @param {string} phone - Normalized phone
  */
 function getState(greenInstanceDbId, phone) {

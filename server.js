@@ -10,7 +10,8 @@ const multer = require('multer');
 const path = require('path');
 const config = require('./config');
 const bcrypt = require('bcryptjs');
-const prisma = require('./src/db');
+const { v4: uuidv4 } = require('uuid');
+const pool = require('./src/mysql');
 const { validateCredentials, requireAuth, requireAdmin } = require('./src/auth');
 const { readExcelFromBuffer } = require('./src/excel');
 const { buildSequence } = require('./src/messages');
@@ -20,7 +21,7 @@ const { normalizePhone, toChatId } = require('./src/phone');
 const { sendMessage: greenSendMessage } = require('./src/greenapi');
 const state = require('./src/state');
 const testState = require('./src/testState');
-const { processGreenApiWebhook, resolvePrismaIdFromWebhookBody } = require('./src/processGreenApiWebhook');
+const { processGreenApiWebhook, resolveGreenInstanceDbIdFromWebhookBody } = require('./src/processGreenApiWebhook');
 const { defaultTemplateStrings } = require('./src/campaignDefaults');
 const { resolveGreenApiConfig, maskApiToken } = require('./src/greenInstance');
 const { createJob, getJob, runCampaignJob } = require('./src/campaignJobs');
@@ -73,7 +74,7 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
-// Webhook: preferred URL — POST /api/webhook/greenapi/<Prisma GreenInstance.id>
+// Webhook: preferred URL — POST /api/webhook/greenapi/<green_instances.id>
 app.post(
   '/api/webhook/greenapi/:greenInstanceDbId',
   express.raw({ type: '*/*', limit: '5mb' }),
@@ -92,7 +93,7 @@ app.post(
   },
 );
 
-// Fallback: POST without /:id — try instanceData.idInstance from body → Prisma row (enables replies if Green API URL is wrong)
+// Fallback: POST without /:id — try instanceData.idInstance from body → DB row (enables replies if Green API URL is wrong)
 app.post(
   '/api/webhook/greenapi',
   express.raw({ type: '*/*', limit: '5mb' }),
@@ -107,18 +108,18 @@ app.post(
         }
       }
       try {
-        const prismaId = await resolvePrismaIdFromWebhookBody(body);
-        if (prismaId) {
+        const dbInstanceId = await resolveGreenInstanceDbIdFromWebhookBody(body);
+        if (dbInstanceId) {
           console.warn(
-            '[Webhook] FALLBACK: URL had no /:id; routed using Green API instanceData.idInstance → Prisma id',
-            prismaId,
+            '[Webhook] FALLBACK: URL had no /:id; routed using Green API instanceData.idInstance → DB id',
+            dbInstanceId,
           );
           console.warn(
-            `[Webhook] Prefer configuring Green API to: POST .../api/webhook/greenapi/${prismaId} (explicit instance).`,
+            `[Webhook] Prefer configuring Green API to: POST .../api/webhook/greenapi/${dbInstanceId} (explicit instance).`,
           );
           res.sendStatus(200);
           setImmediate(() => {
-            processGreenApiWebhook(req.body, prismaId).catch((err) => {
+            processGreenApiWebhook(req.body, dbInstanceId).catch((err) => {
               console.error('[Webhook] Parse or process error:', err.message);
             });
           });
@@ -130,7 +131,7 @@ app.post(
 
       console.warn('[Webhook] MISCONFIGURED: received POST /api/webhook/greenapi without instance id in the path.');
       console.warn(
-        '[Webhook] Green API must call: POST /api/webhook/greenapi/<Prisma-GreenInstance.id> (copy id from Settings → webhook path).',
+        '[Webhook] Green API must call: POST /api/webhook/greenapi/<green-instance-id> (copy id from Settings → webhook path).',
       );
       console.warn(
         '[Webhook] Or ensure webhook JSON includes instanceData.idInstance matching your saved Green API instance ID.',
@@ -140,7 +141,7 @@ app.post(
       }
       res.status(410).json({
         error:
-          'Configure Green API webhook URL as POST /api/webhook/greenapi/<id> where <id> is your Prisma GreenInstance id from Settings.',
+          'Configure Green API webhook URL as POST /api/webhook/greenapi/<id> where <id> is your Green instance id from Settings.',
       });
     })().catch((e) => {
       console.error('[Webhook] Unhandled fallback error:', e);
@@ -214,19 +215,21 @@ app.post('/api/admin/users', requireAdmin, async (req, res) => {
     }
     const normalized = String(email).trim().toLowerCase();
     const normalizedRole = String(role || 'USER').trim().toUpperCase() === 'ADMIN' ? 'ADMIN' : 'USER';
-    const existing = await prisma.user.findUnique({ where: { email: normalized } });
-    if (existing) {
+    const [existingRows] = await pool.execute('SELECT id FROM users WHERE email = ? LIMIT 1', [normalized]);
+    if (existingRows.length > 0) {
       return res.status(400).json({ error: 'User already exists' });
     }
     const hash = await bcrypt.hash(password, 10);
-    const newUser = await prisma.user.create({
-      data: {
-        name: fallbackName(name, normalized),
-        email: normalized,
-        passwordHash: hash,
-        role: normalizedRole,
-      },
-    });
+    const id = uuidv4();
+    await pool.execute(
+      'INSERT INTO users (id, name, email, passwordHash, role) VALUES (?, ?, ?, ?, ?)',
+      [id, fallbackName(name, normalized), normalized, hash, normalizedRole],
+    );
+    const [newRows] = await pool.execute(
+      'SELECT id, name, email, role, createdAt FROM users WHERE id = ? LIMIT 1',
+      [id],
+    );
+    const newUser = newRows[0];
     res.status(201).json({
       user: {
         id: newUser.id,
@@ -251,18 +254,19 @@ app.post('/api/users', requireAdmin, async (req, res) => {
     }
     const normalized = String(email).trim().toLowerCase();
     const normalizedRole = String(role || 'USER').trim().toUpperCase() === 'ADMIN' ? 'ADMIN' : 'USER';
-    const existing = await prisma.user.findUnique({ where: { email: normalized } });
-    if (existing) return res.status(400).json({ error: 'User already exists' });
+    const [existingRows2] = await pool.execute('SELECT id FROM users WHERE email = ? LIMIT 1', [normalized]);
+    if (existingRows2.length > 0) return res.status(400).json({ error: 'User already exists' });
     const hash = await bcrypt.hash(password, 10);
-    const newUser = await prisma.user.create({
-      data: {
-        name: fallbackName(name, normalized),
-        email: normalized,
-        passwordHash: hash,
-        role: normalizedRole,
-      },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-    });
+    const id = uuidv4();
+    await pool.execute(
+      'INSERT INTO users (id, name, email, passwordHash, role) VALUES (?, ?, ?, ?, ?)',
+      [id, fallbackName(name, normalized), normalized, hash, normalizedRole],
+    );
+    const [newRows2] = await pool.execute(
+      'SELECT id, name, email, role, createdAt FROM users WHERE id = ? LIMIT 1',
+      [id],
+    );
+    const newUser = newRows2[0];
     res.status(201).json({ user: newUser });
   } catch (err) {
     console.error('[User create]', err);
@@ -273,10 +277,9 @@ app.post('/api/users', requireAdmin, async (req, res) => {
 // GET /api/users – list dashboard users (admin only)
 app.get('/api/users', requireAdmin, async (req, res) => {
   try {
-    const users = await prisma.user.findMany({
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-    });
+    const [users] = await pool.execute(
+      'SELECT id, name, email, role, createdAt FROM users ORDER BY createdAt DESC',
+    );
     res.json({
       users: users.map((u) => ({
         ...u,
@@ -296,27 +299,37 @@ app.put('/api/users/:id', requireAdmin, async (req, res) => {
     if (!normalizedEmail) {
       return res.status(400).json({ error: 'Email is required' });
     }
-    const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
+    const [existingRows3] = await pool.execute('SELECT * FROM users WHERE id = ? LIMIT 1', [req.params.id]);
+    const existing = existingRows3[0];
     if (!existing) return res.status(404).json({ error: 'User not found' });
 
-    const emailOwner = await prisma.user.findUnique({ where: { email: normalizedEmail } });
+    const [emailOwnerRows] = await pool.execute('SELECT id FROM users WHERE email = ? LIMIT 1', [normalizedEmail]);
+    const emailOwner = emailOwnerRows[0];
     if (emailOwner && emailOwner.id !== existing.id) {
       return res.status(400).json({ error: 'Email is already in use' });
     }
 
-    const data = {
-      name: fallbackName(name, normalizedEmail),
-      email: normalizedEmail,
-      role: String(role || existing.role).trim().toUpperCase() === 'ADMIN' ? 'ADMIN' : 'USER',
-    };
+    const nextName = fallbackName(name, normalizedEmail);
+    const nextRole = String(role || existing.role).trim().toUpperCase() === 'ADMIN' ? 'ADMIN' : 'USER';
     if (password && String(password).trim()) {
-      data.passwordHash = await bcrypt.hash(String(password), 10);
+      const hash = await bcrypt.hash(String(password), 10);
+      await pool.execute(
+        'UPDATE users SET name = ?, email = ?, role = ?, passwordHash = ? WHERE id = ?',
+        [nextName, normalizedEmail, nextRole, hash, req.params.id],
+      );
+    } else {
+      await pool.execute('UPDATE users SET name = ?, email = ?, role = ? WHERE id = ?', [
+        nextName,
+        normalizedEmail,
+        nextRole,
+        req.params.id,
+      ]);
     }
-    const updated = await prisma.user.update({
-      where: { id: req.params.id },
-      data,
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-    });
+    const [updatedRows] = await pool.execute(
+      'SELECT id, name, email, role, createdAt FROM users WHERE id = ? LIMIT 1',
+      [req.params.id],
+    );
+    const updated = updatedRows[0];
     res.json({ user: updated });
   } catch (err) {
     console.error('[User update]', err);
@@ -326,12 +339,13 @@ app.put('/api/users/:id', requireAdmin, async (req, res) => {
 
 app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   try {
-    const existing = await prisma.user.findUnique({ where: { id: req.params.id } });
+    const [existingRows4] = await pool.execute('SELECT id FROM users WHERE id = ? LIMIT 1', [req.params.id]);
+    const existing = existingRows4[0];
     if (!existing) return res.status(404).json({ error: 'User not found' });
     if (req.session?.user?.id === existing.id) {
       return res.status(400).json({ error: 'You cannot delete your own user account.' });
     }
-    await prisma.user.delete({ where: { id: req.params.id } });
+    await pool.execute('DELETE FROM users WHERE id = ?', [req.params.id]);
     res.sendStatus(204);
   } catch (err) {
     console.error('[User delete]', err);
@@ -347,7 +361,7 @@ app.get('/api/campaign/templates', (req, res) => {
 // --- Green API instances (CRUD) ---
 app.get('/api/instances', requireAdmin, async (req, res) => {
   try {
-    const rows = await prisma.greenInstance.findMany({ orderBy: { createdAt: 'asc' } });
+    const [rows] = await pool.execute('SELECT * FROM green_instances ORDER BY createdAt ASC');
     res.json({
       instances: rows.map((r) => ({
         id: r.id,
@@ -367,7 +381,8 @@ app.get('/api/instances', requireAdmin, async (req, res) => {
 
 app.get('/api/instances/:id', requireAdmin, async (req, res) => {
   try {
-    const row = await prisma.greenInstance.findUnique({ where: { id: req.params.id } });
+    const [instRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [req.params.id]);
+    const row = instRows[0];
     if (!row) return res.status(404).json({ error: 'Not found' });
     res.json({
       instance: {
@@ -394,9 +409,13 @@ app.post('/api/instances', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'name, greenInstanceId, and apiToken are required.' });
   }
   try {
-    const row = await prisma.greenInstance.create({
-      data: { name: n, phoneNumber: p, greenInstanceId: gid, apiToken: tok },
-    });
+    const newId = uuidv4();
+    await pool.execute(
+      'INSERT INTO green_instances (id, name, phoneNumber, greenInstanceId, apiToken) VALUES (?, ?, ?, ?, ?)',
+      [newId, n, p, gid, tok],
+    );
+    const [createdRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [newId]);
+    const row = createdRows[0];
     res.status(201).json({
       instance: {
         id: row.id,
@@ -416,7 +435,8 @@ app.post('/api/instances', requireAdmin, async (req, res) => {
 app.put('/api/instances/:id', requireAdmin, async (req, res) => {
   const { name, phoneNumber, greenInstanceId, apiToken } = req.body || {};
   try {
-    const existing = await prisma.greenInstance.findUnique({ where: { id: req.params.id } });
+    const [existRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [req.params.id]);
+    const existing = existRows[0];
     if (!existing) return res.status(404).json({ error: 'Not found' });
     const n = name !== undefined ? String(name).trim() : existing.name;
     const p = phoneNumber !== undefined ? String(phoneNumber).trim() : existing.phoneNumber;
@@ -428,10 +448,12 @@ app.put('/api/instances/:id', requireAdmin, async (req, res) => {
     if (!n || !gid || !tok) {
       return res.status(400).json({ error: 'name, greenInstanceId, and apiToken cannot be empty.' });
     }
-    const row = await prisma.greenInstance.update({
-      where: { id: req.params.id },
-      data: { name: n, phoneNumber: p, greenInstanceId: gid, apiToken: tok },
-    });
+    await pool.execute(
+      'UPDATE green_instances SET name = ?, phoneNumber = ?, greenInstanceId = ?, apiToken = ? WHERE id = ?',
+      [n, p, gid, tok, req.params.id],
+    );
+    const [updRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [req.params.id]);
+    const row = updRows[0];
     res.json({
       instance: {
         id: row.id,
@@ -450,10 +472,10 @@ app.put('/api/instances/:id', requireAdmin, async (req, res) => {
 
 app.delete('/api/instances/:id', requireAdmin, async (req, res) => {
   try {
-    await prisma.greenInstance.delete({ where: { id: req.params.id } });
+    const [delResult] = await pool.execute('DELETE FROM green_instances WHERE id = ?', [req.params.id]);
+    if (delResult.affectedRows === 0) return res.status(404).json({ error: 'Not found' });
     res.sendStatus(204);
   } catch (err) {
-    if (err.code === 'P2025') return res.status(404).json({ error: 'Not found' });
     res.status(500).json({ error: err.message || 'Delete failed' });
   }
 });
@@ -478,7 +500,10 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Only .xlsx files are allowed.' });
     }
 
-    const inst = await prisma.greenInstance.findUnique({ where: { id: greenInstanceDbId } });
+    const [instRows2] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
+      greenInstanceDbId,
+    ]);
+    const inst = instRows2[0];
     if (!inst) {
       return res.status(400).json({ error: 'Invalid greenInstanceId.' });
     }
@@ -547,7 +572,8 @@ app.post('/api/send', async (req, res) => {
   }
 
   try {
-    const row = await prisma.greenInstance.findUnique({ where: { id: gid } });
+    const [sendRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
+    const row = sendRows[0];
     if (!row) {
       return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
     }
@@ -589,15 +615,18 @@ app.post('/api/campaign/log', async (req, res) => {
     if (!Array.isArray(universityStats)) {
       return res.status(400).json({ error: 'universityStats must be an array' });
     }
-    const row = await prisma.campaignLog.create({
-      data: {
-        clientCampaignId: String(campaignId).slice(0, 128),
-        totalUsers: Math.floor(tu),
-        totalUniversities: Math.floor(tuni),
-        universityStats: JSON.stringify(universityStats),
-      },
-    });
-    res.status(201).json({ ok: true, id: row.id });
+    const logId = uuidv4();
+    await pool.execute(
+      'INSERT INTO campaign_logs (id, clientCampaignId, totalUsers, totalUniversities, universityStats) VALUES (?, ?, ?, ?, ?)',
+      [
+        logId,
+        String(campaignId).slice(0, 128),
+        Math.floor(tu),
+        Math.floor(tuni),
+        JSON.stringify(universityStats),
+      ],
+    );
+    res.status(201).json({ ok: true, id: logId });
   } catch (err) {
     console.error('[Campaign log]', err);
     res.status(500).json({ error: err.message || 'Failed to save campaign log' });
@@ -607,9 +636,7 @@ app.post('/api/campaign/log', async (req, res) => {
 // GET /api/campaign/stats – aggregate metrics for dashboard
 app.get('/api/campaign/stats', async (req, res) => {
   try {
-    const logs = await prisma.campaignLog.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
+    const [logs] = await pool.execute('SELECT * FROM campaign_logs ORDER BY createdAt DESC');
     let totalUsers = 0;
     const uniMap = new Map();
     for (const log of logs) {
@@ -660,7 +687,8 @@ app.post('/api/campaign/start', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'greenInstanceId is required.' });
   }
   try {
-    const row = await prisma.greenInstance.findUnique({ where: { id: gid } });
+    const [campRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
+    const row = campRows[0];
     if (!row) {
       return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
     }
@@ -725,7 +753,8 @@ app.post('/api/campaign/test-message', async (req, res) => {
   }
 
   try {
-    const row = await prisma.greenInstance.findUnique({ where: { id: gid } });
+    const [tmRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
+    const row = tmRows[0];
     if (!row) {
       return res.status(200).json({ ok: false, error: 'Invalid greenInstanceId.' });
     }
@@ -776,7 +805,8 @@ app.post('/api/campaign/test-start', async (req, res) => {
     testState.resetState();
     console.log('[Test start] Cleared test-conversation-state.json (full reset for isolated test run)');
 
-    const row = await prisma.greenInstance.findUnique({ where: { id: gid } });
+    const [tsRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
+    const row = tsRows[0];
     if (!row) {
       return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
     }
@@ -886,7 +916,10 @@ app.post('/api/test/reply', async (req, res) => {
   if (state.getState(greenInstanceDbId, phone) == null) {
     return res.status(400).json({ success: false, error: 'phone not in campaign for this instance' });
   }
-  const row = await prisma.greenInstance.findUnique({ where: { id: greenInstanceDbId } });
+  const [trRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
+    greenInstanceDbId,
+  ]);
+  const row = trRows[0];
   if (!row) return res.status(400).json({ success: false, error: 'Invalid greenInstanceId' });
   const greenApi = resolveGreenApiConfig(row);
   console.log('[Test] Simulated reply for', phone);
@@ -907,7 +940,10 @@ app.post('/api/test/reply-all', async (req, res) => {
     if (colon < 1) continue;
     const greenInstanceDbId = key.slice(0, colon);
     const phone = key.slice(colon + 1);
-    const row = await prisma.greenInstance.findUnique({ where: { id: greenInstanceDbId } });
+    const [raRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
+      greenInstanceDbId,
+    ]);
+    const row = raRows[0];
     if (!row) continue;
     const greenApi = resolveGreenApiConfig(row);
     await onIncomingReply(phone, { greenApi, greenInstanceDbId });
@@ -939,6 +975,6 @@ app.listen(PORT, '0.0.0.0', () => {
   const prodCount = Object.keys(state.loadState()).length;
   const testCount = Object.keys(testState.loadState()).length;
   console.log('Server running at http://localhost:' + PORT + '/');
-  console.log('Webhook (per instance): POST /api/webhook/greenapi/<GreenInstance.id>');
+  console.log('Webhook (per instance): POST /api/webhook/greenapi/<green_instances.id>');
   console.log('[State] Loaded prod conversation keys:', prodCount, '| test keys:', testCount);
 });

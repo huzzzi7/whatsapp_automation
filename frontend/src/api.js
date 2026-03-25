@@ -125,7 +125,7 @@ export async function createCampaignContact(payload) {
   return data;
 }
 
-/** @param {string} greenInstanceId - Prisma GreenInstance.id */
+/** @param {string} greenInstanceId - green_instances.id */
 export async function startCampaign(users, greenInstanceId, batchSize, delaySeconds) {
   return apiFetch('/api/campaign/start', {
     method: 'POST',

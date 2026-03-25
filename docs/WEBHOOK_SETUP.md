@@ -5,11 +5,11 @@ Reply-driven messages (message 2, 3, …) require Green API to **POST** incoming
 ## Recommended URL (per WhatsApp instance)
 
 ```
-https://<PUBLIC_HOST>/api/webhook/greenapi/<PRISMA_GREEN_INSTANCE_ID>
+https://<PUBLIC_HOST>/api/webhook/greenapi/<GREEN_INSTANCE_DB_ID>
 ```
 
 - **`<PUBLIC_HOST>`** — URL reachable from the internet (not `localhost` unless Green API runs locally). Use ngrok, a VPS, or similar.
-- **`<PRISMA_GREEN_INSTANCE_ID>`** — The **id** shown in **Settings** for that instance (cuid), **not** only the numeric “Green instance ID” from the Green API console. It must match the instance you select for **Send all** / uploads.
+- **`<GREEN_INSTANCE_DB_ID>`** — The **id** shown in **Settings** for that instance (UUID stored in `green_instances`), **not** only the numeric “Green instance ID” from the Green API console. It must match the instance you select for **Send all** / uploads.
 
 Example: `https://abc123.ngrok-free.app/api/webhook/greenapi/clxyz789...`
 
@@ -28,7 +28,7 @@ Set **`VITE_PUBLIC_WEBHOOK_BASE_URL`** (and optionally **`VITE_API_URL`**) in th
 
 After a user replies on WhatsApp, logs should include:
 
-- `[HTTP] POST /api/webhook/greenapi/<id>` (or `FALLBACK` with Prisma id)
+- `[HTTP] POST /api/webhook/greenapi/<id>` (or `FALLBACK` with DB id)
 - `[Webhook] Instance: <id>`
 - `[Webhook] Parsed phone: ...`
 - `[Webhook] Prod state exists: true` (production) or test state for test flows

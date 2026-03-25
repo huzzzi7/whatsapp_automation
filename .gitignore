@@ -3,10 +3,7 @@ node_modules
 frontend/node_modules
 dist
 build
-.prisma
 dev.db
-prisma/dev.db
-prisma/dev.db-journal
 *.log
 progress.json
 conversation-state.json

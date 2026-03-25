@@ -99,8 +99,7 @@ export default function SettingsPage() {
       ) : instances.length === 0 ? (
         <Card>
           <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-            No instances yet. Click <strong>Add new instance</strong> or run <code>npx prisma db seed</code> if{' '}
-            <code>GREENAPI_INSTANCE</code> and <code>GREENAPI_TOKEN</code> are set in <code>.env</code>.
+            No instances yet. Click <strong>Add new instance</strong> to add your Green API credentials.
           </p>
         </Card>
       ) : (
