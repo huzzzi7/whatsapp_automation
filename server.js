@@ -5,6 +5,7 @@
 require('dotenv').config();
 const express = require('express');
 const session = require('express-session');
+const MySQLStore = require('express-mysql-session')(session);
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
@@ -31,6 +32,14 @@ const PORT = process.env.PORT || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 const cookieSecure = process.env.SESSION_COOKIE_SECURE === 'true' || isProduction;
 const sameSite = (process.env.SESSION_COOKIE_SAMESITE || 'lax').toLowerCase();
+
+const sessionStore = new MySQLStore({
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT) || 3306,
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'whatsapp',
+});
 
 const allowedOrigins = (process.env.CORS_ORIGIN || '')
   .split(',')
@@ -158,7 +167,9 @@ if (process.env.TRUST_PROXY === 'true') {
 
 app.use(
   session({
+    key: process.env.SESSION_COOKIE_NAME || 'connect.sid',
     secret: process.env.SESSION_SECRET,
+    store: sessionStore,
     resave: false,
     saveUninitialized: false,
     cookie: {
