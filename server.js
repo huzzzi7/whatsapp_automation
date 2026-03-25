@@ -971,10 +971,16 @@ app.get('/{*splat}', (req, res) => {
   res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
 });
 
+console.log('Starting server...');
+
 app.listen(PORT, '0.0.0.0', () => {
-  const prodCount = Object.keys(state.loadState()).length;
-  const testCount = Object.keys(testState.loadState()).length;
-  console.log('Server running at http://localhost:' + PORT + '/');
+  console.log(`Server running on port ${PORT}`);
   console.log('Webhook (per instance): POST /api/webhook/greenapi/<green_instances.id>');
-  console.log('[State] Loaded prod conversation keys:', prodCount, '| test keys:', testCount);
+  try {
+    const prodCount = Object.keys(state.loadState()).length;
+    const testCount = Object.keys(testState.loadState()).length;
+    console.log('[State] Loaded prod keys:', prodCount, '| test keys:', testCount);
+  } catch (err) {
+    console.error('[State ERROR]', err.message);
+  }
 });

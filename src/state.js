@@ -26,7 +26,9 @@ function loadState() {
       _state = {};
       saveState();
     } else {
-      throw err;
+      console.error('[STATE LOAD ERROR]', err.message);
+      _state = {};
+      return _state;
     }
   }
   return _state;
@@ -34,7 +36,11 @@ function loadState() {
 
 function saveState() {
   const state = _state !== null ? _state : loadState();
-  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[STATE SAVE ERROR]', err.message);
+  }
 }
 
 /**
