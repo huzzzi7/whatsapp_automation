@@ -41,7 +41,7 @@ export default function HomePage() {
 
   return (
     <div className="home-dashboard">
-      <h1>Welcome to the Dashboard</h1>
+      <h1>Welcome to Your Dashboard</h1>
       <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
         Overview of logged campaign runs (after successful sends from the Campaign Wizard).
       </p>
