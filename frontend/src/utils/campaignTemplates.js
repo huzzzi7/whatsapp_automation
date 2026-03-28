@@ -1,11 +1,11 @@
 /**
- * Campaign message templates with {{university}} and {{link}}.
+ * Campaign message templates with {{university}}, {{link}}, and {{group}}.
  * Keep in sync with server src/campaignDefaults.js (used before API load).
  */
 export const DEFAULT_CAMPAIGN_TEMPLATE_STRINGS = [
   'Heyy what you studying at {{university}} in sept!',
   "Psych! There's another gc if you want to join I can add you",
-  'Of course heres the link!',
+  'Of course heres the link! {{group}}',
   'Did you book the welcome week tickets that came out? We all have on the gc',
   'Oh let me send you the link cause cheap rn, we did the cheapest one and queue skip',
   '{{link}}',
@@ -21,8 +21,12 @@ const MAX_MESSAGES = 25;
 export function applyTemplatesToUser(user, templateStrings) {
   const uni = user?.university != null ? String(user.university) : '';
   const link = user?.link != null ? String(user.link) : '';
+  const group = user?.group != null ? String(user.group) : '';
   return (templateStrings || []).map((t) =>
-    String(t).replace(/\{\{university\}\}/gi, uni).replace(/\{\{link\}\}/gi, link),
+    String(t)
+      .replace(/\{\{university\}\}/gi, uni)
+      .replace(/\{\{link\}\}/gi, link)
+      .replace(/\{\{group\}\}/gi, group),
   );
 }
 

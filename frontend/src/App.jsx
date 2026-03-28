@@ -1,12 +1,12 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import HomePage from './pages/HomePage';
 import SettingsPage from './pages/SettingsPage';
-import AutomationPage from './pages/AutomationPage';
 import AdminRoute from './components/AdminRoute';
 import CreateUserPage from './pages/CreateUserPage';
+import CampaignWizardPage from './pages/CampaignWizardPage';
 
 export default function App() {
   return (
@@ -23,7 +23,8 @@ export default function App() {
               </AdminRoute>
             )}
           />
-          <Route path="send" element={<AutomationPage />} />
+          <Route path="send" element={<Navigate to="/campaign" replace />} />
+          <Route path="campaign" element={<CampaignWizardPage />} />
           <Route
             path="create-user"
             element={

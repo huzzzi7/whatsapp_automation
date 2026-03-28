@@ -60,6 +60,7 @@ export default function AutomationPage() {
   const [campaignSettings, setCampaignSettings] = useState({
     batchSize: 20,
     delaySeconds: 30,
+    messageDelaySeconds: 0,
   });
   const [activeJob, setActiveJob] = useState(null);
   const [universityJobs, setUniversityJobs] = useState({});
@@ -141,6 +142,7 @@ export default function AutomationPage() {
     setCampaignSettings({
       batchSize: Number(payload?.batchSize) || 20,
       delaySeconds: Math.max(0, Number(payload?.delaySeconds) || 0),
+      messageDelaySeconds: Math.max(0, Number(payload?.messageDelaySeconds) || 0),
     });
     setUploadResult((prev) => (prev ? applyTemplatesToUploadResult(prev, templates) : prev));
     setIsMessageModalOpen(false);
@@ -178,6 +180,7 @@ export default function AutomationPage() {
         selectedInstanceId,
         campaignSettings.batchSize,
         campaignSettings.delaySeconds,
+        Math.max(0, Number(campaignSettings.messageDelaySeconds) || 0),
       );
       if (data?.ok) {
         const baseJob = {
@@ -187,6 +190,7 @@ export default function AutomationPage() {
           processedUsers: 0,
           batchSize: campaignSettings.batchSize,
           delaySeconds: campaignSettings.delaySeconds,
+          messageDelaySeconds: Math.max(0, Number(campaignSettings.messageDelaySeconds) || 0),
           startedAt: Date.now(),
           error: '',
           snapshot,

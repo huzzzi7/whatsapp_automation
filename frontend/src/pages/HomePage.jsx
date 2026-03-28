@@ -43,7 +43,7 @@ export default function HomePage() {
     <div className="home-dashboard">
       <h1>Welcome to the Dashboard</h1>
       <p style={{ color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
-        Overview of logged campaign runs (after successful sends from Send Messages).
+        Overview of logged campaign runs (after successful sends from the Campaign Wizard).
       </p>
 
       {error ? <div className="alert-error">{error}</div> : null}
@@ -87,7 +87,7 @@ export default function HomePage() {
               <div className="home-dashboard__uni-list-wrap">
                 {universityStats.length === 0 ? (
                   <p style={{ color: 'var(--text-muted)', margin: '0.5rem 0 0', fontSize: '14px' }}>
-                    No university breakdown yet. Run a campaign from Send Messages.
+                    No university breakdown yet. Run a campaign from the Campaign Wizard.
                   </p>
                 ) : (
                   <ul className="home-dashboard__uni-list">

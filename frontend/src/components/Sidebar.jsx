@@ -47,8 +47,8 @@ export default function Sidebar() {
           </li>
         )}
         <li style={{ marginBottom: '4px' }}>
-          <NavLink to="/send" className={navClass}>
-            Send Messages
+          <NavLink to="/campaign" className={navClass}>
+            Campaign
           </NavLink>
         </li>
         {String(user?.role || '').toLowerCase() === 'admin' && (

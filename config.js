@@ -17,10 +17,10 @@ const defaultCountryCode = process.env.DEFAULT_COUNTRY_CODE || '44';
 const messageTemplates = {
   1: (user) => `Heyy what you studying at ${user.university} in sept!`,
   2: () => 'Psych! There\'s another gc if you want to join I can add you',
-  3: () => 'Of course heres the link!',
+  3: (user) => 'Of course heres the link!' + (user.group ? ` ${user.group}` : ''),
   4: () => 'Did you book the welcome week tickets that came out? We all have on the gc',
   5: () => 'Oh let me send you the link cause cheap rn, we did the cheapest one and queue skip',
-  6: (user) => user.link || '',
+  6: (user) => [user.link, user.group].filter(Boolean).join(' ') || '',
 };
 
 module.exports = {

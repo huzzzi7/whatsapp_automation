@@ -8,6 +8,11 @@ const { sendMessage } = require('./greenapi');
 const state = require('./state');
 const testState = require('./testState');
 
+function sleep(ms) {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * @param {string} chatId
  * @param {string} message
@@ -32,7 +37,7 @@ async function safeSend(chatId, message, greenApi) {
  * Send message 1 to each user and persist progress (reply-driven continuation uses same store).
  * @param {Array} users
  * @param {Object} config - { messageTemplates }
- * @param {{ greenApi: object, greenInstanceDbId: string }} opts
+ * @param {{ greenApi: object, greenInstanceDbId: string, messageDelayMs?: number }} opts
  * @param {StateStore} store
  * @param {string} campaignIdPrefix - e.g. "campaign-" or "test-"
  * @param {{ shouldSkipUser?: (user: object, phone: string) => boolean }} [hooks]
@@ -40,7 +45,7 @@ async function safeSend(chatId, message, greenApi) {
  */
 async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaignIdPrefix, hooks = {}) {
   const { messageTemplates } = config;
-  const { greenApi, greenInstanceDbId } = opts || {};
+  const { greenApi, greenInstanceDbId, messageDelayMs = 0 } = opts || {};
   const { shouldSkipUser } = hooks;
 
   if (!greenApi || !greenInstanceDbId) {
@@ -50,35 +55,44 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
   const campaignId = String(campaignIdPrefix || '') + Date.now();
   let startedUsers = 0;
 
-  for (const user of users) {
-    const phone = (user.phone || '').trim();
-    if (!phone) continue;
+  const list = Array.isArray(users) ? users : [];
+  const delay = Math.max(0, Number(messageDelayMs) || 0);
+  for (let idx = 0; idx < list.length; idx += 1) {
+    try {
+      const user = list[idx];
+      const phone = (user.phone || '').trim();
+      if (!phone) continue;
 
-    if (typeof shouldSkipUser === 'function' && shouldSkipUser(user, phone)) {
-      continue;
-    }
+      if (typeof shouldSkipUser === 'function' && shouldSkipUser(user, phone)) {
+        continue;
+      }
 
-    const sequence = user.sequence || buildSequence(user, messageTemplates);
-    if (!sequence || sequence.length < 1) {
-      console.warn('[Campaign] Invalid message sequence for', phone);
-      continue;
-    }
+      const sequence = user.sequence || buildSequence(user, messageTemplates);
+      if (!sequence || sequence.length < 1) {
+        console.warn('[Campaign] Invalid message sequence for', phone);
+        continue;
+      }
 
-    const chatId = toChatId(phone);
-    if (!chatId) continue;
+      const chatId = toChatId(phone);
+      if (!chatId) continue;
 
-    const text = sequence[0];
-    if (text == null || String(text).trim() === '') continue;
+      const text = sequence[0];
+      if (text == null || String(text).trim() === '') continue;
 
-    console.log('[Campaign] Sending message 1 to', phone);
-    const ok = await safeSend(chatId, text, greenApi);
-    if (ok) {
-      store.setState(greenInstanceDbId, phone, {
-        lastSentIndex: 1,
-        sequence,
-        campaignId,
-      });
-      startedUsers++;
+      console.log('[Campaign] Sending message 1 to', phone);
+      const ok = await safeSend(chatId, text, greenApi);
+      if (ok) {
+        store.setState(greenInstanceDbId, phone, {
+          lastSentIndex: 1,
+          sequence,
+          campaignId,
+        });
+        startedUsers++;
+      }
+    } finally {
+      if (idx < list.length - 1 && delay > 0) {
+        await sleep(delay);
+      }
     }
   }
 
@@ -90,7 +104,7 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
  * Send only message 1 to each user (production state). Same behavior as before refactor.
  * @param {Array} users
  * @param {Object} config - { messageTemplates }
- * @param {{ greenApi: object, greenInstanceDbId: string }} opts
+ * @param {{ greenApi: object, greenInstanceDbId: string, messageDelayMs?: number }} opts
  */
 async function sendFirstMessageOnly(users, config, opts) {
   const { greenInstanceDbId } = opts || {};

@@ -15,6 +15,13 @@ function toDelayInt(value, fallback) {
   return Math.max(0, Math.floor(n));
 }
 
+function toMessageDelaySeconds(value) {
+  let n = Number(value);
+  if (!Number.isFinite(n)) n = 0;
+  if (n < 0) n = 0;
+  return Math.floor(n);
+}
+
 function sleep(ms) {
   if (ms <= 0) return Promise.resolve();
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -28,9 +35,10 @@ function chunkUsers(users, batchSize) {
   return out;
 }
 
-function createJob({ users, batchSize, delaySeconds }) {
+function createJob({ users, batchSize, delaySeconds, messageDelaySeconds = 0 }) {
   const safeBatchSize = toPositiveInt(batchSize, 20);
   const safeDelaySeconds = toDelayInt(delaySeconds, 30);
+  const safeMessageDelaySeconds = toMessageDelaySeconds(messageDelaySeconds);
   const jobId = randomUUID();
   jobs[jobId] = {
     status: 'running',
@@ -39,10 +47,16 @@ function createJob({ users, batchSize, delaySeconds }) {
     startedUsers: 0,
     batchSize: safeBatchSize,
     delaySeconds: safeDelaySeconds,
+    messageDelaySeconds: safeMessageDelaySeconds,
     startedAt: Date.now(),
     error: '',
   };
-  return { jobId, batchSize: safeBatchSize, delaySeconds: safeDelaySeconds };
+  return {
+    jobId,
+    batchSize: safeBatchSize,
+    delaySeconds: safeDelaySeconds,
+    messageDelaySeconds: safeMessageDelaySeconds,
+  };
 }
 
 function getJob(jobId) {
@@ -55,12 +69,14 @@ async function runCampaignJob(jobId, users, config, opts) {
   try {
     const batches = chunkUsers(users, job.batchSize);
     const delayMs = job.delaySeconds * 1000;
+    const messageDelayMs = Math.max(0, Number(job.messageDelaySeconds) || 0) * 1000;
+    const sendOpts = { ...opts, messageDelayMs };
     for (let i = 0; i < batches.length; i += 1) {
       const slice = batches[i];
-      const result = await sendFirstMessageOnly(slice, config, opts);
+      const result = await sendFirstMessageOnly(slice, config, sendOpts);
       job.startedUsers += Number(result?.startedUsers || 0);
       job.processedUsers = Math.min(job.totalUsers, job.processedUsers + slice.length);
-      if (i < batches.length - 1) {
+      if (i < batches.length - 1 && delayMs > 0) {
         await sleep(delayMs);
       }
     }

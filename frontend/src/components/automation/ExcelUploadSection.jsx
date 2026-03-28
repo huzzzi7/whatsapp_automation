@@ -13,6 +13,8 @@ export default function ExcelUploadSection({
   onError,
   disabled,
   onAdjustCampaignMessages,
+  /** When false, hides the "Campaign Settings" toolbar button (e.g. wizard Step 1). Default true. */
+  showCampaignSettingsButton = true,
   instances,
   selectedInstanceId,
   onSelectInstance,
@@ -112,14 +114,16 @@ export default function ExcelUploadSection({
           />
         </div>
         <div className="automation-upload-toolbar__actions">
-          <Button
-            type="button"
-            className="ui-button--inline ui-button--secondary adjust-messages-btn"
-            onClick={() => onAdjustCampaignMessages?.()}
-            disabled={busy}
-          >
-            Campaign Settings
-          </Button>
+          {showCampaignSettingsButton ? (
+            <Button
+              type="button"
+              className="ui-button--inline ui-button--secondary adjust-messages-btn"
+              onClick={() => onAdjustCampaignMessages?.()}
+              disabled={busy}
+            >
+              Campaign Settings
+            </Button>
+          ) : null}
           <Button
             type="button"
             className="upload-btn ui-button--inline"

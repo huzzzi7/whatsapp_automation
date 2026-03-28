@@ -109,7 +109,7 @@ export async function deleteAppUser(id) {
   if (!res.ok) throw new Error(data?.error || 'Delete failed');
 }
 
-/** Campaign recipient (phone, university, city, link) */
+/** Campaign recipient (phone, university, city, link, group) */
 export async function createCampaignContact(payload) {
   const res = await fetch(BASE_URL + '/api/campaign/contacts', {
     method: 'POST',
@@ -126,10 +126,22 @@ export async function createCampaignContact(payload) {
 }
 
 /** @param {string} greenInstanceId - green_instances.id */
-export async function startCampaign(users, greenInstanceId, batchSize, delaySeconds) {
+export async function startCampaign(
+  users,
+  greenInstanceId,
+  batchSize,
+  delaySeconds,
+  messageDelaySeconds = 0,
+) {
   return apiFetch('/api/campaign/start', {
     method: 'POST',
-    body: JSON.stringify({ users, greenInstanceId, batchSize, delaySeconds }),
+    body: JSON.stringify({
+      users,
+      greenInstanceId,
+      batchSize,
+      delaySeconds,
+      messageDelaySeconds,
+    }),
   });
 }
 
@@ -210,7 +222,7 @@ export async function getCampaignStats() {
   return apiFetch('/api/campaign/stats', { method: 'GET' });
 }
 
-/** Default campaign templates with {{university}} / {{link}} placeholders. */
+/** Default campaign templates with {{university}}, {{link}}, and {{group}} placeholders. */
 export async function getCampaignTemplates() {
   return apiFetch('/api/campaign/templates', { method: 'GET' });
 }

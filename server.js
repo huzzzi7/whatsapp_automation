@@ -364,7 +364,7 @@ app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   }
 });
 
-// GET /api/campaign/templates – default {{university}} / {{link}} template strings for dashboard modal
+// GET /api/campaign/templates – default {{university}} / {{link}} / {{group}} template strings for dashboard modal
 app.get('/api/campaign/templates', (req, res) => {
   res.json({ templates: defaultTemplateStrings() });
 });
@@ -686,7 +686,15 @@ app.get('/api/campaign/stats', async (req, res) => {
 
 // POST /api/campaign/start – reply-driven: send only message 1 to each user
 app.post('/api/campaign/start', async (req, res) => {
-  const { users: bodyUsers, greenInstanceId, batchSize, delaySeconds } = req.body || {};
+  const {
+    users: bodyUsers,
+    greenInstanceId,
+    batchSize,
+    delaySeconds,
+    messageDelaySeconds: rawMessageDelaySeconds = 0,
+  } = req.body || {};
+  let messageDelaySeconds = Number(rawMessageDelaySeconds) || 0;
+  if (messageDelaySeconds < 0) messageDelaySeconds = 0;
   if (!bodyUsers || !Array.isArray(bodyUsers) || bodyUsers.length === 0) {
     return res.status(400).json({
       ok: false,
@@ -708,6 +716,7 @@ app.post('/api/campaign/start', async (req, res) => {
       users: bodyUsers,
       batchSize,
       delaySeconds,
+      messageDelaySeconds,
     });
     runCampaignJob(jobId, bodyUsers, config, {
       greenApi,
@@ -735,6 +744,7 @@ app.get('/api/campaign/status/:jobId', (req, res) => {
     processedUsers: job.processedUsers,
     batchSize: job.batchSize,
     delaySeconds: job.delaySeconds,
+    messageDelaySeconds: job.messageDelaySeconds ?? 0,
     startedAt: job.startedAt,
     error: job.error || '',
   });
@@ -896,7 +906,7 @@ app.get('/api/state/:phone', (req, res) => {
 // POST /api/campaign/contacts – create one campaign contact (recipient)
 app.post('/api/campaign/contacts', (req, res) => {
   try {
-    const { phone, university, city, link } = req.body || {};
+    const { phone, university, city, link, group } = req.body || {};
     const normalized = normalizePhone(phone, config.defaultCountryCode);
     if (!normalized)
       return res.status(400).json({ error: 'Phone is required', field: 'phone' });
@@ -905,6 +915,7 @@ app.post('/api/campaign/contacts', (req, res) => {
       university: university || '',
       city: city || '',
       link: link || '',
+      group: group || '',
     };
     user.sequence = buildSequence(user, config.messageTemplates);
     res.status(201).json({ user });

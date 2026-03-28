@@ -13,7 +13,7 @@ function delay(ms) {
 /**
  * Send all users their message sequences. Users must have .sequence (string[])
  * or will be built from config.messageTemplates. Uses config for GreenAPI and delays.
- * @param {Array<{ phone: string, university?: string, city?: string, link?: string, sequence?: string[] }>} users
+ * @param {Array<{ phone: string, university?: string, city?: string, link?: string, group?: string, sequence?: string[] }>} users
  * @param {Object} config - Full config (greenApi, delays, messageTemplates)
  * @param {{ dryRun?: boolean }} opts - dryRun: if true, skip GreenAPI calls and only run delays (for preview)
  */
