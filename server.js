@@ -9,6 +9,7 @@ const MySQLStore = require('express-mysql-session')(session);
 const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const config = require('./config');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
@@ -180,7 +181,17 @@ app.use(
     },
   })
 );
-app.use(express.static(path.join(__dirname, 'frontend/dist')));
+const frontendDistPath = path.join(__dirname, 'frontend/dist');
+const frontendIndexPath = path.join(frontendDistPath, 'index.html');
+const hasFrontendBuild = fs.existsSync(frontendDistPath) && fs.existsSync(frontendIndexPath);
+
+if (hasFrontendBuild) {
+  app.use(express.static(frontendDistPath));
+} else {
+  console.warn(
+    '[Frontend] Build output not found at frontend/dist. Run "npm run build" before starting the server.',
+  );
+}
 
 // Auth routes (no requireAuth)
 app.post('/api/auth/login', async (req, res) => {
@@ -990,7 +1001,13 @@ app.get('/api/webhook/test', (req, res) => {
 });
 
 app.get('/{*splat}', (req, res) => {
-  res.sendFile(path.join(__dirname, 'frontend/dist/index.html'));
+  if (!hasFrontendBuild) {
+    return res.status(503).json({
+      error:
+        'Frontend build not found. Run "npm run build" (or ensure deployment runs it) so frontend/dist/index.html exists.',
+    });
+  }
+  return res.sendFile(frontendIndexPath);
 });
 
 console.log('Starting server...');
