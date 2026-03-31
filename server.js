@@ -1,6 +1,6 @@
 /**
  * Express server for WhatsApp automation UI.
- * Serves public/, handles POST /api/upload, POST /api/send, POST /api/campaign/start, POST /api/campaign/test-message, POST /api/campaign/test-start, POST /api/webhook/greenapi.
+ * Serves frontend/dist, handles POST /api/upload, POST /api/send, POST /api/campaign/start, POST /api/campaign/test-message, POST /api/campaign/test-start, POST /api/webhook/greenapi.
  */
 require('dotenv').config();
 const express = require('express');
@@ -180,7 +180,7 @@ app.use(
     },
   })
 );
-app.use(express.static(path.join(process.cwd(), 'public')));
+app.use(express.static(path.join(__dirname, 'frontend/dist')));
 
 // Auth routes (no requireAuth)
 app.post('/api/auth/login', async (req, res) => {
@@ -990,7 +990,7 @@ app.get('/api/webhook/test', (req, res) => {
 });
 
 app.get('/{*splat}', (req, res) => {
-  res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'frontend/dist/index.html'));
 });
 
 console.log('Starting server...');

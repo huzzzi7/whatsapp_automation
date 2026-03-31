@@ -4,6 +4,7 @@
   "description": "WhatsApp 6-message sequence automation via GreenAPI, driven by Excel (original.xlsx)",
   "main": "server.js",
   "scripts": {
+    "build": "npm --prefix frontend install && npm --prefix frontend run build",
     "start": "node server.js",
     "dry-run": "node index.js --dry-run",
     "server": "node server.js",
