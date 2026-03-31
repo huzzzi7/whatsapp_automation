@@ -28,6 +28,19 @@ const { defaultTemplateStrings } = require('./src/campaignDefaults');
 const { resolveGreenApiConfig, maskApiToken } = require('./src/greenInstance');
 const { createJob, getJob, runCampaignJob } = require('./src/campaignJobs');
 
+const MIN_NODE_MAJOR = 20;
+const MIN_NODE_MINOR = 19;
+const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
+const isSupportedNode = nodeMajor > MIN_NODE_MAJOR || (nodeMajor === MIN_NODE_MAJOR && nodeMinor >= MIN_NODE_MINOR);
+
+if (!isSupportedNode) {
+  console.error(
+    `[Startup ERROR] Node.js ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}+ is required. Current: ${process.versions.node}. ` +
+      'Upgrade your runtime to build/serve the Vite frontend reliably (vite@8, @vitejs/plugin-react@6, react-router@7).',
+  );
+  process.exit(1);
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
