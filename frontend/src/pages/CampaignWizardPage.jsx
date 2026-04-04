@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import CampaignStepper from '../components/campaign/CampaignStepper';
 import ExcelUploadSection from '../components/automation/ExcelUploadSection';
@@ -12,6 +13,7 @@ import { DEFAULT_CAMPAIGN_TEMPLATE_STRINGS } from '../utils/campaignTemplates';
 const TOTAL_STEPS = 4;
 
 export default function CampaignWizardPage() {
+  const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(1);
   const [wizardData, setWizardData] = useState({
     selectedInstanceId: '',
@@ -254,6 +256,7 @@ export default function CampaignWizardPage() {
                 ...prev,
                 campaignJob: { jobId, status: 'running' },
               }));
+              navigate('/campaign-details');
             }}
           />
         ) : (

@@ -4,6 +4,31 @@
  */
 const axios = require('axios');
 
+async function sendMessageWithRetry(url, body, retries = 2) {
+  try {
+    const res = await axios.post(url, body, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 30000,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`GreenAPI returned ${res.status}: ${JSON.stringify(res.data)}`);
+    }
+    return res.data;
+  } catch (err) {
+    if (retries > 0) {
+      console.log('[GreenAPI] Retry sending...', retries);
+      await new Promise((r) => setTimeout(r, 3000));
+      return sendMessageWithRetry(url, body, retries - 1);
+    }
+
+    const msg = err.response
+      ? `GreenAPI ${err.response.status}: ${JSON.stringify(err.response.data)}`
+      : err.message;
+
+    throw new Error(msg);
+  }
+}
+
 /**
  * Send one text message via GreenAPI.
  * @param {string} chatId - e.g. "447123456789@c.us"
@@ -20,20 +45,7 @@ async function sendMessage(chatId, text, greenApiConfig) {
   const url = `${baseUrl}/waInstance${instanceId}/sendMessage/${apiToken}`;
   const body = { chatId, message: text };
 
-  try {
-    const res = await axios.post(url, body, {
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 30000,
-    });
-    if (res.status < 200 || res.status >= 300) {
-      throw new Error(`GreenAPI returned ${res.status}: ${JSON.stringify(res.data)}`);
-    }
-  } catch (err) {
-    const msg = err.response
-      ? `GreenAPI ${err.response.status}: ${JSON.stringify(err.response.data)}`
-      : err.message;
-    throw new Error(msg);
-  }
+  await sendMessageWithRetry(url, body);
 }
 
 /**

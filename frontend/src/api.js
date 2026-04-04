@@ -132,6 +132,7 @@ export async function startCampaign(
   batchSize,
   delaySeconds,
   messageDelaySeconds = 0,
+  scheduledAt,
 ) {
   return apiFetch('/api/campaign/start', {
     method: 'POST',
@@ -141,12 +142,48 @@ export async function startCampaign(
       batchSize,
       delaySeconds,
       messageDelaySeconds,
+      ...(scheduledAt != null && String(scheduledAt).trim() !== '' ? { scheduledAt } : {}),
     }),
   });
 }
 
 export async function getCampaignStatus(jobId) {
   return apiFetch(`/api/campaign/status/${encodeURIComponent(jobId)}`, { method: 'GET' });
+}
+
+/** @returns {Promise<{ running: object | null, paused: object[], queued: object[] }>} */
+export async function getActiveCampaigns() {
+  return apiFetch('/api/campaigns/active', { method: 'GET' });
+}
+
+/** @returns {Promise<{ campaigns: object[] }>} */
+export async function listCampaignsApi() {
+  return apiFetch('/api/campaigns', { method: 'GET' });
+}
+
+/** @returns {Promise<{ campaign: object, contacts?: object[] }>} */
+export async function getCampaignDetail(id) {
+  return apiFetch(`/api/campaigns/${encodeURIComponent(id)}`, { method: 'GET' });
+}
+
+/** @returns {Promise<{ contacts: object[], total: number, page: number, limit: number, totalPages: number }>} */
+export async function listCampaignContacts(campaignId, { page = 1, limit = 50 } = {}) {
+  const q = new URLSearchParams();
+  q.set('page', String(page));
+  q.set('limit', String(limit));
+  return apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/contacts?${q}`, { method: 'GET' });
+}
+
+export async function pauseCampaign(id) {
+  return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/pause`, { method: 'POST', body: '{}' });
+}
+
+export async function resumeCampaign(id) {
+  return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/resume`, { method: 'POST', body: '{}' });
+}
+
+export async function startQueuedCampaign(id) {
+  return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/start`, { method: 'POST', body: '{}' });
 }
 
 /**

@@ -1,0 +1,121 @@
+/**
+ * Ensures core tables exist after a partial db.sql import. Safe to re-run (IF NOT EXISTS).
+ */
+require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
+const mysql = require('mysql2/promise');
+
+const REQUIRED = ['users', 'green_instances', 'campaigns', 'campaign_contacts', 'sessions'];
+
+const DDL = {
+  users: `CREATE TABLE IF NOT EXISTS users (
+  id VARCHAR(50) PRIMARY KEY,
+  name VARCHAR(255) DEFAULT '',
+  email VARCHAR(255) UNIQUE,
+  passwordHash VARCHAR(255),
+  role VARCHAR(50) DEFAULT 'USER',
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  green_instances: `CREATE TABLE IF NOT EXISTS green_instances (
+  id VARCHAR(50) PRIMARY KEY,
+  name VARCHAR(255),
+  phoneNumber VARCHAR(50),
+  greenInstanceId VARCHAR(100),
+  apiToken VARCHAR(255),
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  campaigns: `CREATE TABLE IF NOT EXISTS campaigns (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  green_instance_id CHAR(36) NOT NULL,
+  name VARCHAR(255) NULL,
+  status VARCHAR(20) NOT NULL,
+  queue_order INT NOT NULL,
+  total_contacts INT NOT NULL DEFAULT 0,
+  sent_count INT NOT NULL DEFAULT 0,
+  failed_or_skipped_count INT NOT NULL DEFAULT 0,
+  failed_count INT NOT NULL DEFAULT 0,
+  skipped_count INT NOT NULL DEFAULT 0,
+  batch_size INT NULL,
+  delay_seconds INT NULL,
+  message_delay_seconds INT NULL,
+  error_message TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  started_at TIMESTAMP NULL DEFAULT NULL,
+  completed_at TIMESTAMP NULL DEFAULT NULL,
+  scheduled_at TIMESTAMP NULL DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  campaign_contacts: `CREATE TABLE IF NOT EXISTS campaign_contacts (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  campaign_id CHAR(36) NOT NULL,
+  phone_normalized VARCHAR(20) NOT NULL,
+  payload_json LONGTEXT NULL,
+  sort_order INT NOT NULL,
+  first_send_status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  attempt_count INT NOT NULL DEFAULT 0,
+  last_error TEXT NULL,
+  sent_at TIMESTAMP NULL DEFAULT NULL,
+  UNIQUE KEY uk_campaign_contacts_campaign_phone (campaign_id, phone_normalized),
+  KEY idx_campaign_contacts_campaign_status_sort (campaign_id, first_send_status, sort_order),
+  CONSTRAINT fk_campaign_contacts_campaign
+    FOREIGN KEY (campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  sessions: `CREATE TABLE IF NOT EXISTS sessions (
+  session_id varchar(128) COLLATE utf8mb4_bin NOT NULL,
+  expires int unsigned NOT NULL,
+  data mediumtext COLLATE utf8mb4_bin,
+  PRIMARY KEY (session_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
+};
+
+async function main() {
+  const conn = await mysql.createConnection({
+    host: process.env.DB_HOST || '127.0.0.1',
+    port: Number(process.env.DB_PORT) || 3306,
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'whatsapp',
+    multipleStatements: false,
+  });
+
+  const [tables] = await conn.query(
+    'SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()',
+  );
+  const existing = new Set(tables.map((r) => r.name));
+  console.log('SHOW TABLES (current):', [...existing].sort().join(', ') || '(none)');
+
+  const order = ['users', 'green_instances', 'campaigns', 'campaign_contacts', 'sessions'];
+  for (const name of order) {
+    if (existing.has(name)) {
+      console.log(`OK: ${name} exists`);
+      continue;
+    }
+    console.log(`CREATE missing: ${name}`);
+    await conn.query(DDL[name]);
+    existing.add(name);
+  }
+
+  const [after] = await conn.query(
+    'SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME',
+  );
+  console.log('After ensure:', after.map((r) => r.name).join(', '));
+
+  const missing = REQUIRED.filter((t) => !after.some((r) => r.name === t));
+  if (missing.length) {
+    console.error('Still missing:', missing.join(', '));
+    await conn.end();
+    process.exit(1);
+  }
+
+  console.log('All required tables present:', REQUIRED.join(', '));
+  await conn.end();
+}
+
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

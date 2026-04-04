@@ -54,9 +54,14 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Test state exists:', hasTest);
   console.log('[Webhook] Prod state exists:', hasProd);
   if (!hasTest && !hasProd) {
-    console.log(
-      '[Webhook] No matching test or prod state for this instance/phone; reply automation will not send (wrong instance id or phone mismatch?).',
-    );
+    const preview = JSON.stringify(body).slice(0, 500);
+    console.warn('[Automation BLOCKED] No conversation state found', {
+      greenInstanceDbId,
+      phone: norm,
+      suggestion:
+        'Ensure the first message was sent via /api/campaign/start, /api/campaign/test-start, /api/campaign/test-message, or /api/send (reply mode); check phone normalization matches.',
+    });
+    console.warn('[Webhook] Payload preview (500 chars):', preview);
   }
   console.log('[Webhook] Comparing instanceId with state keys');
   console.log('[Webhook] Prod state keys:', Object.keys(state.loadState()));

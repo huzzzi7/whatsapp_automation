@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import ExcelUploadSection from '../components/automation/ExcelUploadSection';
 import CampaignPreviewSection from '../components/automation/CampaignPreviewSection';
@@ -46,6 +47,7 @@ function buildCampaignLogPayload(uploadResult, usersSent, meta) {
 }
 
 export default function AutomationPage() {
+  const navigate = useNavigate();
   const [uploadResult, setUploadResult] = useState(null);
   const [uploadedUserCount, setUploadedUserCount] = useState(0);
   const [uploadError, setUploadError] = useState('');
@@ -207,6 +209,7 @@ export default function AutomationPage() {
         }
         setStatusText('Campaign started.');
         setStatusType('success');
+        navigate('/campaign-details');
       } else {
         setStatusText(data?.error || 'Campaign start failed.');
         setStatusType('error');
@@ -215,7 +218,7 @@ export default function AutomationPage() {
       setStatusText(e.message || 'Request failed.');
       setStatusType('error');
     }
-  }, [selectedInstanceId, campaignSettings]);
+  }, [selectedInstanceId, campaignSettings, navigate]);
 
   useEffect(() => {
     const hasActive = activeJob?.status === 'running'

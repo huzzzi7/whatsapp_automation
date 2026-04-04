@@ -27,6 +27,23 @@ const { processGreenApiWebhook, resolveGreenInstanceDbIdFromWebhookBody } = requ
 const { defaultTemplateStrings } = require('./src/campaignDefaults');
 const { resolveGreenApiConfig, maskApiToken } = require('./src/greenInstance');
 const { createJob, getJob, runCampaignJob } = require('./src/campaignJobs');
+const {
+  createCampaign,
+  getNextQueueOrder,
+  insertCampaignContacts,
+  setTotalContacts,
+  getCampaignById,
+  getRunningCampaign,
+  getPausedCampaigns,
+  getQueuedCampaigns,
+  listCampaigns,
+  getCampaignContactsSample,
+  countCampaignContacts,
+  listCampaignContactsPage,
+  updateCampaignStatus,
+} = require('./src/repositories/campaignRepository');
+const { tryRunNext } = require('./src/services/CampaignCoordinator');
+const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
 
 const MIN_NODE_MAJOR = 20;
 const MIN_NODE_MINOR = 19;
@@ -117,11 +134,16 @@ app.post(
 );
 
 // Fallback: POST without /:id — try instanceData.idInstance from body → DB row (enables replies if Green API URL is wrong)
-app.post(
-  '/api/webhook/greenapi',
-  express.raw({ type: '*/*', limit: '5mb' }),
-  (req, res) => {
-    (async () => {
+// Also accepts legacy/short paths used by some deployments: /api/greenapi and /greenapi
+function handleGreenApiWebhookNoId(req, res) {
+  (async () => {
+      console.log(
+        '[Webhook] Fallback route hit:',
+        req.method,
+        req.originalUrl || req.url,
+        'bytes:',
+        Buffer.isBuffer(req.body) ? req.body.length : 0,
+      );
       let body = null;
       if (Buffer.isBuffer(req.body) && req.body.length > 0) {
         try {
@@ -152,7 +174,9 @@ app.post(
         console.error('[Webhook] Fallback resolution error:', e.message);
       }
 
-      console.warn('[Webhook] MISCONFIGURED: received POST /api/webhook/greenapi without instance id in the path.');
+      console.warn(
+        `[Webhook] MISCONFIGURED: received POST ${req.originalUrl || req.url} without instance id in the path.`,
+      );
       console.warn(
         '[Webhook] Green API must call: POST /api/webhook/greenapi/<green-instance-id> (copy id from Settings → webhook path).',
       );
@@ -166,12 +190,16 @@ app.post(
         error:
           'Configure Green API webhook URL as POST /api/webhook/greenapi/<id> where <id> is your Green instance id from Settings.',
       });
-    })().catch((e) => {
-      console.error('[Webhook] Unhandled fallback error:', e);
-      if (!res.headersSent) res.status(500).json({ error: 'Webhook handler error' });
-    });
-  },
-);
+  })().catch((e) => {
+    console.error('[Webhook] Unhandled fallback error:', e);
+    if (!res.headersSent) res.status(500).json({ error: 'Webhook handler error' });
+  });
+}
+
+const greenApiWebhookRaw = express.raw({ type: '*/*', limit: '5mb' });
+app.post('/api/webhook/greenapi', greenApiWebhookRaw, handleGreenApiWebhookNoId);
+app.post('/api/greenapi', greenApiWebhookRaw, handleGreenApiWebhookNoId);
+app.post('/greenapi', greenApiWebhookRaw, handleGreenApiWebhookNoId);
 
 app.use(express.json({ limit: '5mb' }));
 
@@ -616,15 +644,16 @@ app.post('/api/send', async (req, res) => {
     await sendAllUsers(
       users,
       { greenApi, delays: config.delays, messageTemplates: config.messageTemplates },
-      { dryRun: !!dryRun },
+      { dryRun: !!dryRun, greenInstanceDbId: gid },
     );
     res.json({
       ok: true,
       dryRun: !!dryRun,
       sentCount: users.length,
+      replyAutomation: !dryRun,
       message: dryRun
-        ? `Dry run: would have sent to ${users.length} users.`
-        : `Sent to ${users.length} users.`,
+        ? `Dry run: would have sent first message only (reply automation) to ${users.length} users.`
+        : `First message sent to ${users.length} users; replies will continue the sequence.`,
     });
   } catch (err) {
     console.error('[Send]', err);
@@ -716,6 +745,7 @@ app.post('/api/campaign/start', async (req, res) => {
     batchSize,
     delaySeconds,
     messageDelaySeconds: rawMessageDelaySeconds = 0,
+    scheduledAt: rawScheduledAt,
   } = req.body || {};
   let messageDelaySeconds = Number(rawMessageDelaySeconds) || 0;
   if (messageDelaySeconds < 0) messageDelaySeconds = 0;
@@ -735,20 +765,45 @@ app.post('/api/campaign/start', async (req, res) => {
     if (!row) {
       return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
     }
-    const greenApi = resolveGreenApiConfig(row);
-    const { jobId } = createJob({
-      users: bodyUsers,
-      batchSize,
-      delaySeconds,
+
+    const safeBatchSize = Math.max(1, Math.floor(Number(batchSize) || 20));
+    const safeDelaySeconds = Math.max(0, Math.floor(Number(delaySeconds) || 30));
+    const campaignId = uuidv4();
+    const queueOrder = await getNextQueueOrder();
+
+    let scheduleDate = null;
+    if (rawScheduledAt != null && String(rawScheduledAt).trim() !== '') {
+      const d = new Date(String(rawScheduledAt).trim());
+      if (!Number.isNaN(d.getTime())) scheduleDate = d;
+    }
+
+    await createCampaign({
+      id: campaignId,
+      greenInstanceId: gid,
+      name: null,
+      batchSize: safeBatchSize,
+      delaySeconds: safeDelaySeconds,
       messageDelaySeconds,
+      totalContacts: bodyUsers.length,
+      queueOrder,
+      scheduledAt: scheduleDate,
     });
-    runCampaignJob(jobId, bodyUsers, config, {
-      greenApi,
-      greenInstanceDbId: gid,
-    }).catch((err) => {
-      console.error('[Campaign job]', err);
+
+    const inserted = await insertCampaignContacts(campaignId, bodyUsers);
+    if (inserted === 0) {
+      await pool.execute('DELETE FROM campaigns WHERE id = ?', [campaignId]);
+      return res.status(400).json({
+        ok: false,
+        error: 'No valid contacts to queue (each row needs a normalizable phone).',
+      });
+    }
+    await setTotalContacts(campaignId, inserted);
+
+    tryRunNext().catch((err) => {
+      console.error('[Campaign coordinator]', err);
     });
-    res.json({ ok: true, jobId });
+
+    res.json({ ok: true, campaignId, jobId: campaignId });
   } catch (err) {
     console.error('[Campaign]', err);
     res.status(500).json({
@@ -758,10 +813,156 @@ app.post('/api/campaign/start', async (req, res) => {
   }
 });
 
-// GET /api/campaign/status/:jobId – in-memory campaign progress
-app.get('/api/campaign/status/:jobId', (req, res) => {
+// POST /api/campaigns/:id/pause – running → paused (worker exits at batch / pauseCheck boundary)
+app.post('/api/campaigns/:id/pause', async (req, res) => {
+  try {
+    const c = await getCampaignById(req.params.id);
+    if (!c) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found.' });
+    }
+    if (c.status !== 'running') {
+      return res.status(400).json({ ok: false, error: 'Only a running campaign can be paused.' });
+    }
+    await updateCampaignStatus(c.id, 'paused');
+    console.log('[Campaign] Campaign paused:', c.id);
+    res.json({ ok: true, status: 'paused' });
+  } catch (err) {
+    console.error('[Campaign pause]', err);
+    res.status(500).json({ ok: false, error: err.message || 'Pause failed.' });
+  }
+});
+
+// POST /api/campaigns/:id/resume – paused → running, start worker if none running
+app.post('/api/campaigns/:id/resume', async (req, res) => {
+  try {
+    const c = await getCampaignById(req.params.id);
+    if (!c) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found.' });
+    }
+    if (c.status !== 'paused') {
+      return res.status(400).json({ ok: false, error: 'Only a paused campaign can be resumed.' });
+    }
+    const running = await getRunningCampaign();
+    if (running) {
+      return res.status(400).json({ ok: false, error: 'Another campaign is already running.' });
+    }
+    await updateCampaignStatus(c.id, 'running');
+    console.log('[Campaign] Campaign resumed:', c.id);
+    tryRunNext().catch((err) => console.error('[Campaign resume] tryRunNext', err));
+    res.json({ ok: true, status: 'running' });
+  } catch (err) {
+    console.error('[Campaign resume]', err);
+    res.status(500).json({ ok: false, error: err.message || 'Resume failed.' });
+  }
+});
+
+// POST /api/campaigns/:id/start – queued → running (manual start when no other campaign is running)
+app.post('/api/campaigns/:id/start', async (req, res) => {
+  try {
+    const c = await getCampaignById(req.params.id);
+    if (!c) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found.' });
+    }
+    if (c.status !== 'queued') {
+      return res.status(400).json({ ok: false, error: 'Only a queued campaign can be started manually.' });
+    }
+    const running = await getRunningCampaign();
+    if (running) {
+      return res.status(400).json({ ok: false, error: 'Another campaign is already running.' });
+    }
+    await updateCampaignStatus(c.id, 'running');
+    console.log('[Campaign] Queued campaign started manually:', c.id);
+    tryRunNext().catch((err) => console.error('[Campaign start] tryRunNext', err));
+    res.json({ ok: true, status: 'running' });
+  } catch (err) {
+    console.error('[Campaign start queued]', err);
+    res.status(500).json({ ok: false, error: err.message || 'Start failed.' });
+  }
+});
+
+// GET /api/campaigns/active – running + paused + queued (register before /api/campaigns/:id)
+app.get('/api/campaigns/active', async (req, res) => {
+  try {
+    console.log('[Campaigns] Fetching active campaigns');
+    const running = await getRunningCampaign();
+    const paused = await getPausedCampaigns();
+    const queued = await getQueuedCampaigns();
+    res.json({
+      running: running ? formatCampaign(running) : null,
+      paused: paused.map((c) => formatCampaign(c)),
+      queued: queued.map((c) => formatCampaign(c)),
+    });
+  } catch (err) {
+    console.error('[Campaigns active]', err);
+    res.status(500).json({ error: err.message || 'Failed to load active campaigns.' });
+  }
+});
+
+// GET /api/campaigns – history; optional ?status=completed,failed,paused
+app.get('/api/campaigns', async (req, res) => {
+  try {
+    console.log('[Campaigns] Fetching campaign history');
+    const raw = String(req.query.status || '').trim();
+    const parts = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    const campaigns = await listCampaigns({ statuses: parts.length > 0 ? parts : undefined });
+    res.json({ campaigns: campaigns.map((c) => formatCampaign(c)) });
+  } catch (err) {
+    console.error('[Campaigns list]', err);
+    res.status(500).json({ error: err.message || 'Failed to list campaigns.' });
+  }
+});
+
+// GET /api/campaigns/:id/contacts – paginated recipients (before /api/campaigns/:id)
+app.get('/api/campaigns/:id/contacts', async (req, res) => {
+  try {
+    const c = await getCampaignById(req.params.id);
+    if (!c) {
+      return res.status(404).json({ error: 'Campaign not found.' });
+    }
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limitRaw = parseInt(String(req.query.limit || '50'), 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, limitRaw)) : 50;
+    const total = await countCampaignContacts(req.params.id);
+    const rows = await listCampaignContactsPage(req.params.id, page, limit);
+    const totalPages = total > 0 ? Math.ceil(total / limit) : 1;
+    res.json({
+      contacts: rows.map((r) => formatContactSample(r)).filter(Boolean),
+      total,
+      page,
+      limit,
+      totalPages,
+    });
+  } catch (err) {
+    console.error('[Campaigns contacts]', err);
+    res.status(500).json({ error: err.message || 'Failed to load contacts.' });
+  }
+});
+
+// GET /api/campaigns/:id – single campaign; ?includeContacts=1 adds last 20 contacts
+app.get('/api/campaigns/:id', async (req, res) => {
+  try {
+    const c = await getCampaignById(req.params.id);
+    if (!c) {
+      return res.status(404).json({ error: 'Campaign not found.' });
+    }
+    const payload = { campaign: formatCampaign(c) };
+    const inc = String(req.query.includeContacts || '').toLowerCase();
+    if (inc === '1' || inc === 'true') {
+      const rows = await getCampaignContactsSample(req.params.id, 20);
+      payload.contacts = rows.map((r) => formatContactSample(r)).filter(Boolean);
+    }
+    res.json(payload);
+  } catch (err) {
+    console.error('[Campaigns detail]', err);
+    res.status(500).json({ error: err.message || 'Failed to load campaign.' });
+  }
+});
+
+// GET /api/campaign/status/:jobId – in-memory job (legacy) or DB campaign row
+app.get('/api/campaign/status/:jobId', async (req, res) => {
+  try {
   const job = getJob(req.params.jobId);
-  if (!job) return res.status(404).json({ error: 'Campaign job not found.' });
+    if (job) {
   return res.json({
     status: job.status,
     totalUsers: job.totalUsers,
@@ -772,45 +973,121 @@ app.get('/api/campaign/status/:jobId', (req, res) => {
     startedAt: job.startedAt,
     error: job.error || '',
   });
+    }
+
+    const c = await getCampaignById(req.params.jobId);
+    if (!c) {
+      return res.status(404).json({ error: 'Campaign job not found.' });
+    }
+
+    const processedUsers =
+      c.status === 'completed' || c.status === 'failed'
+        ? c.totalContacts
+        : Math.min(
+            c.totalContacts,
+            c.sentCount + (c.failedCount ?? 0) + (c.skippedCount ?? 0),
+          );
+
+    const startedAtMs = c.startedAt ? new Date(c.startedAt).getTime() : Date.now();
+
+    return res.json({
+      status: c.status,
+      totalUsers: c.totalContacts,
+      processedUsers,
+      batchSize: c.batchSize ?? 20,
+      delaySeconds: c.delaySeconds ?? 30,
+      messageDelaySeconds: c.messageDelaySeconds ?? 0,
+      startedAt: startedAtMs,
+      error: c.errorMessage || '',
+    });
+  } catch (err) {
+    console.error('[Campaign status]', err);
+    res.status(500).json({ error: err.message || 'Status failed.' });
+  }
 });
 
-// POST /api/campaign/test-message – send message 1 only; no conversation-state read/write
+// POST /api/campaign/test-message – send message 1 only; registers test conversation state for webhooks
 app.post('/api/campaign/test-message', async (req, res) => {
   const { greenInstanceId, phone: rawPhone, sequence } = req.body || {};
   const gid = String(greenInstanceId || '').trim();
   if (!gid) {
-    return res.status(200).json({ ok: false, error: 'greenInstanceId is required.' });
+    return res.status(200).json({
+      ok: false,
+      replyAutomation: false,
+      warning: 'Replies will not trigger automation until a valid send completes.',
+      error: 'greenInstanceId is required.',
+    });
   }
   if (!sequence || !Array.isArray(sequence) || sequence.length < 1) {
-    return res.status(200).json({ ok: false, error: 'sequence must be a non-empty array.' });
+    return res.status(200).json({
+      ok: false,
+      replyAutomation: false,
+      warning: 'Replies will not trigger automation.',
+      error: 'sequence must be a non-empty array.',
+    });
   }
   const message1 = String(sequence[0] ?? '').trim();
   if (!message1) {
-    return res.status(200).json({ ok: false, error: 'Message 1 (sequence[0]) cannot be empty.' });
+    return res.status(200).json({
+      ok: false,
+      replyAutomation: false,
+      warning: 'Replies will not trigger automation.',
+      error: 'Message 1 (sequence[0]) cannot be empty.',
+    });
   }
 
   const normalized = normalizePhone(rawPhone, config.defaultCountryCode);
   if (!normalized || normalized.length < 10) {
-    return res.status(200).json({ ok: false, error: 'Invalid phone number.' });
+    return res.status(200).json({
+      ok: false,
+      replyAutomation: false,
+      warning: 'Replies will not trigger automation.',
+      error: 'Invalid phone number.',
+    });
   }
   if (normalized.length > 15) {
-    return res.status(200).json({ ok: false, error: 'Phone number is too long (E.164 max 15 digits).' });
+    return res.status(200).json({
+      ok: false,
+      replyAutomation: false,
+      warning: 'Replies will not trigger automation.',
+      error: 'Phone number is too long (E.164 max 15 digits).',
+    });
   }
 
   try {
     const [tmRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
     const row = tmRows[0];
     if (!row) {
-      return res.status(200).json({ ok: false, error: 'Invalid greenInstanceId.' });
+      return res.status(200).json({
+        ok: false,
+        replyAutomation: false,
+        warning: 'Replies will not trigger automation.',
+        error: 'Invalid greenInstanceId.',
+      });
     }
     const greenApi = resolveGreenApiConfig(row);
     const chatId = toChatId(normalized);
     await greenSendMessage(chatId, message1, greenApi);
-    return res.json({ ok: true });
+
+    const seqForState = sequence.map((s) => String(s ?? '').trim());
+    const campaignId = `test-msg-${Date.now()}`;
+    testState.setState(gid, normalized, {
+      lastSentIndex: 1,
+      sequence: seqForState,
+      campaignId,
+    });
+
+    return res.json({
+      ok: true,
+      replyAutomation: true,
+      campaignId,
+    });
   } catch (err) {
     console.error('[Test message]', err);
     return res.status(200).json({
       ok: false,
+      replyAutomation: false,
+      warning: 'Replies will not trigger automation. Use /api/campaign/test-start or fix the error below.',
       error: err.message || 'Send failed.',
     });
   }
@@ -1035,4 +1312,8 @@ app.listen(PORT, '0.0.0.0', () => {
   } catch (err) {
     console.error('[State ERROR]', err.message);
   }
+  setInterval(() => {
+    console.log('[Scheduler] Tick at:', new Date().toISOString());
+    tryRunNext().catch((e) => console.error('[Campaign scheduler]', e?.message || e));
+  }, 30000);
 });

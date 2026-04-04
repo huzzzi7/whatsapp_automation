@@ -3,6 +3,10 @@ import Button from '../ui/Button';
 import { startCampaign, getCampaignStatus, logCampaign } from '../../api';
 import { applyTemplatesToUploadResult } from '../../utils/campaignTemplates';
 import { buildCampaignLogPayload } from '../../utils/campaignLog';
+import {
+  getCurrentLondonDatetimeLocalString,
+  londonDatetimeLocalToUtcIso,
+} from '../../utils/scheduleTime';
 
 const POLL_MS = 1500;
 
@@ -34,6 +38,12 @@ export default function CampaignReviewStep({
   const [jobError, setJobError] = useState('');
   const loggedRef = useRef(false);
 
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduledTime, setScheduledTime] = useState('');
+  const [scheduleError, setScheduleError] = useState('');
+  const scheduleDialogRef = useRef(null);
+  const scheduleModalRef = useRef(null);
+
   const mergedUpload = useMemo(
     () => applyTemplatesToUploadResult(uploadResult, campaignSettings?.templates || []),
     [uploadResult, campaignSettings?.templates],
@@ -44,44 +54,123 @@ export default function CampaignReviewStep({
     return row?.name || selectedInstanceId || '—';
   }, [instances, selectedInstanceId]);
 
-  const handleStart = useCallback(async () => {
-    setStartError('');
-    loggedRef.current = false;
-    if (!selectedInstanceId) {
-      setStartError('Select a WhatsApp instance.');
-      return;
-    }
-    const users = mergedUpload?.users;
-    if (!users || !Array.isArray(users) || users.length === 0) {
-      setStartError('No recipients to send.');
-      return;
-    }
+  const closeScheduleModal = useCallback(() => {
+    setScheduleOpen(false);
+    setScheduleError('');
+  }, []);
 
-    setStarting(true);
-    try {
-      const data = await startCampaign(
-        users,
-        selectedInstanceId,
-        campaignSettings.batchSize,
-        campaignSettings.delaySeconds,
-        Math.max(0, Number(campaignSettings.messageDelaySeconds) || 0),
-      );
-      if (!data?.ok || !data.jobId) {
-        setStartError(data?.error || 'Campaign start failed.');
-        return;
+  const openScheduleModal = useCallback(() => {
+    setScheduledTime(getCurrentLondonDatetimeLocalString());
+    setScheduleError('');
+    setScheduleOpen(true);
+  }, []);
+
+  const submitStart = useCallback(
+    async (scheduledAtIso) => {
+      setStartError('');
+      loggedRef.current = false;
+      if (!selectedInstanceId) {
+        setStartError('Select a WhatsApp instance.');
+        return false;
       }
-      setJobId(String(data.jobId));
-      setJobStatus('running');
-      setProcessedUsers(0);
-      setTotalUsers(users.length);
-      setJobError('');
-      onCampaignStart(String(data.jobId));
-    } catch (e) {
-      setStartError(e?.message || 'Request failed.');
-    } finally {
-      setStarting(false);
+      const users = mergedUpload?.users;
+      if (!users || !Array.isArray(users) || users.length === 0) {
+        setStartError('No recipients to send.');
+        return false;
+      }
+
+      setStarting(true);
+      try {
+        const data = await startCampaign(
+          users,
+          selectedInstanceId,
+          campaignSettings.batchSize,
+          campaignSettings.delaySeconds,
+          Math.max(0, Number(campaignSettings.messageDelaySeconds) || 0),
+          scheduledAtIso,
+        );
+        if (!data?.ok || !data.jobId) {
+          setStartError(data?.error || 'Campaign start failed.');
+          return false;
+        }
+        setJobId(String(data.jobId));
+        setJobStatus(scheduledAtIso ? 'queued' : 'running');
+        setProcessedUsers(0);
+        setTotalUsers(users.length);
+        setJobError('');
+        onCampaignStart(String(data.jobId));
+        return true;
+      } catch (e) {
+        setStartError(e?.message || 'Request failed.');
+        return false;
+      } finally {
+        setStarting(false);
+      }
+    },
+    [mergedUpload, selectedInstanceId, campaignSettings, onCampaignStart],
+  );
+
+  const handleStart = useCallback(() => {
+    void submitStart(undefined);
+  }, [submitStart]);
+
+  const handleScheduleConfirm = useCallback(async () => {
+    if (!scheduledTime || !String(scheduledTime).trim()) {
+      setScheduleError('Choose a date and time.');
+      return;
     }
-  }, [mergedUpload, selectedInstanceId, campaignSettings, onCampaignStart]);
+    const scheduledAt = londonDatetimeLocalToUtcIso(scheduledTime);
+    if (!scheduledAt) {
+      setScheduleError('Invalid date and time.');
+      return;
+    }
+    setScheduleError('');
+    const ok = await submitStart(scheduledAt);
+    if (ok) {
+      closeScheduleModal();
+      setScheduledTime('');
+    }
+  }, [scheduledTime, submitStart, closeScheduleModal]);
+
+  useEffect(() => {
+    const el = scheduleDialogRef.current;
+    if (!el) return;
+    if (scheduleOpen && !el.open) el.showModal();
+    if (!scheduleOpen && el.open) el.close();
+  }, [scheduleOpen]);
+
+  useEffect(() => {
+    const el = scheduleDialogRef.current;
+    if (!el) return;
+    const handleClose = () => closeScheduleModal();
+    const handleDialogClick = (e) => {
+      if (e.target === el) closeScheduleModal();
+    };
+    el.addEventListener('close', handleClose);
+    el.addEventListener('click', handleDialogClick);
+    return () => {
+      el.removeEventListener('close', handleClose);
+      el.removeEventListener('click', handleDialogClick);
+    };
+  }, [closeScheduleModal]);
+
+  useEffect(() => {
+    if (!scheduleOpen) return undefined;
+    const handleClickOutside = (e) => {
+      if (scheduleModalRef.current && !scheduleModalRef.current.contains(e.target)) {
+        closeScheduleModal();
+      }
+    };
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') closeScheduleModal();
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [scheduleOpen, closeScheduleModal]);
 
   useEffect(() => {
     if (!jobId) return undefined;
@@ -221,6 +310,14 @@ export default function CampaignReviewStep({
         </Button>
         <Button
           type="button"
+          className="ui-button--inline ui-button--secondary"
+          onClick={openScheduleModal}
+          disabled={starting || Boolean(jobId && jobStatus !== 'failed')}
+        >
+          Schedule
+        </Button>
+        <Button
+          type="button"
           className="ui-button--inline"
           onClick={handleStart}
           disabled={starting || Boolean(jobId && jobStatus !== 'failed')}
@@ -229,6 +326,50 @@ export default function CampaignReviewStep({
           {jobId ? (jobStatus === 'failed' ? 'Retry campaign' : 'Campaign started') : 'Start campaign'}
         </Button>
       </div>
+
+      <dialog
+        ref={scheduleDialogRef}
+        className="test-message-modal"
+        aria-labelledby="campaign-schedule-modal-title"
+        aria-describedby="campaign-schedule-modal-desc"
+      >
+        <div ref={scheduleModalRef} className="test-message-modal__inner">
+          <h2 id="campaign-schedule-modal-title" className="test-message-modal__title">
+            Schedule campaign
+          </h2>
+          <p id="campaign-schedule-modal-desc" className="test-message-modal__note">
+            Time is interpreted as UK (Europe/London), including daylight saving. Sent to the server as UTC (ISO
+            8601).
+          </p>
+          <div className="test-message-modal__field">
+            <label className="ui-input-label" htmlFor="campaign-schedule-datetime">
+              Date and time
+            </label>
+            <input
+              id="campaign-schedule-datetime"
+              type="datetime-local"
+              className="ui-input-field"
+              value={scheduledTime}
+              onChange={(e) => setScheduledTime(e.target.value)}
+            />
+            <span className="test-message-modal__hint">Europe/London civil time → UTC for scheduling.</span>
+          </div>
+          {scheduleError ? <div className="alert-error test-message-modal__error">{scheduleError}</div> : null}
+          <div className="test-message-modal__actions">
+            <Button
+              type="button"
+              className="ui-button--inline ui-button--secondary"
+              onClick={closeScheduleModal}
+              disabled={starting}
+            >
+              Cancel
+            </Button>
+            <Button type="button" className="ui-button--inline" onClick={() => void handleScheduleConfirm()} loading={starting}>
+              Confirm schedule
+            </Button>
+          </div>
+        </div>
+      </dialog>
     </div>
   );
 }
