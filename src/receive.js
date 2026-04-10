@@ -29,13 +29,33 @@ function parseIncomingNotification(body) {
     return null;
   }
 
+  let providerMessageId = null;
+  if (payload.idMessage != null && String(payload.idMessage).trim() !== '') {
+    providerMessageId = String(payload.idMessage).trim();
+  } else if (payload.messageData?.idMessage != null && String(payload.messageData.idMessage).trim() !== '') {
+    providerMessageId = String(payload.messageData.idMessage).trim();
+  } else if (
+    payload.messageData?.textMessageData?.idMessage != null &&
+    String(payload.messageData.textMessageData.idMessage).trim() !== ''
+  ) {
+    providerMessageId = String(payload.messageData.textMessageData.idMessage).trim();
+  }
+
   let text = '';
   const messageData = payload.messageData || {};
   if (messageData.typeMessage === 'textMessage' && messageData.textMessageData) {
     text = messageData.textMessageData.textMessage || '';
   }
 
-  return { phone: normalized, chatId: toChatId(normalized), text };
+  const typeWebhook = payload.typeWebhook != null ? String(payload.typeWebhook) : 'incomingMessageReceived';
+
+  return {
+    phone: normalized,
+    chatId: toChatId(normalized),
+    text,
+    providerMessageId,
+    typeWebhook,
+  };
 }
 
 module.exports = { parseIncomingNotification };

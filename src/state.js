@@ -1,10 +1,12 @@
 /**
  * Conversation state: persist progress per (greenInstanceDbId, phone).
  * Keys: `${greenInstanceDbId}:${phone}` — stored in conversation-state.json.
+ * Dual-write: same data upserted to MySQL conversation_state; getState reads MySQL first, then file.
  */
 const fs = require('fs');
 const fsPromises = fs.promises;
 const path = require('path');
+const conversationStateRepository = require('./repositories/conversationStateRepository');
 
 const STATE_FILE = path.join(__dirname, '..', 'conversation-state.json');
 
@@ -79,15 +81,66 @@ function schedulePersistState() {
   }, 8);
 }
 
+function dualWriteMysqlUpsert(greenInstanceDbId, phone, data) {
+  conversationStateRepository
+    .upsertState(greenInstanceDbId, phone, data)
+    .then(() => {
+      console.log('[STATE] Dual write success');
+    })
+    .catch((err) => {
+      console.error('[STATE] MySQL upsert failed:', err.message);
+    });
+}
+
+function dualWriteMysqlUpdateLastSent(greenInstanceDbId, phone, newIndex) {
+  conversationStateRepository
+    .updateLastSent(greenInstanceDbId, phone, newIndex)
+    .then(() => {
+      console.log('[STATE] Dual write success');
+    })
+    .catch((err) => {
+      console.error('[STATE] MySQL updateLastSent failed:', err.message);
+    });
+}
+
+function dualWriteMysqlDelete(greenInstanceDbId, phone) {
+  conversationStateRepository
+    .deleteState(greenInstanceDbId, phone)
+    .then(() => {
+      console.log('[STATE] Dual write success');
+    })
+    .catch((err) => {
+      console.error('[STATE] MySQL deleteState failed:', err.message);
+    });
+}
+
 /**
  * @param {string} greenInstanceDbId - green_instances.id
  * @param {string} phone - Normalized phone
+ * @returns {Promise<{ lastSentIndex: number, sequence: string[], campaignId?: string }|null>}
  */
-function getState(greenInstanceDbId, phone) {
-  const state = loadState();
+async function getState(greenInstanceDbId, phone) {
   const key = makeStateKey(greenInstanceDbId, phone);
   if (!key) return null;
-  return state[key] != null ? state[key] : null;
+
+  try {
+    const fromDb = await conversationStateRepository.getState(greenInstanceDbId, phone);
+    if (fromDb != null) {
+      loadState();
+      _state[key] = fromDb;
+      console.log('[STATE] Loaded from MySQL');
+      return fromDb;
+    }
+  } catch (err) {
+    console.error('[STATE] MySQL read error:', err.message);
+  }
+
+  loadState();
+  const fileData = _state[key] != null ? _state[key] : null;
+  if (fileData != null) {
+    console.log('[STATE] Fallback to file');
+  }
+  return fileData;
 }
 
 /**
@@ -102,6 +155,7 @@ function setState(greenInstanceDbId, phone, data) {
   state[key] = data;
   _stateMutationRev += 1;
   schedulePersistState();
+  dualWriteMysqlUpsert(greenInstanceDbId, phone, data);
 }
 
 /**
@@ -116,6 +170,7 @@ function updateLastSent(greenInstanceDbId, phone, newIndex) {
   state[key].lastSentIndex = newIndex;
   _stateMutationRev += 1;
   schedulePersistState();
+  dualWriteMysqlUpdateLastSent(greenInstanceDbId, phone, newIndex);
 }
 
 /**
@@ -131,6 +186,7 @@ function deleteState(greenInstanceDbId, phone) {
   delete st[key];
   _stateMutationRev += 1;
   schedulePersistState();
+  dualWriteMysqlDelete(greenInstanceDbId, phone);
 }
 
 function resetState() {

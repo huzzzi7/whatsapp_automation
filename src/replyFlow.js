@@ -60,7 +60,7 @@ async function safeSend(chatId, message, greenApi) {
  *   pauseCheck: if returns true, stop sending remaining users in this batch (partial send).
  * @param {StateStore} store
  * @param {string} campaignIdPrefix - e.g. "campaign-" or "test-" (ignored if opts.stableCampaignId is set)
- * @param {{ shouldSkipUser?: (user: object, phone: string) => boolean }} [hooks]
+ * @param {{ shouldSkipUser?: (user: object, phone: string) => boolean | Promise<boolean> }} [hooks]
  * @returns {Promise<{ startedUsers: number, sentPhoneDigits: string[], failedSends: Record<string, string> }>}
  */
 async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaignIdPrefix, hooks = {}) {
@@ -98,8 +98,9 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
     const phoneDigits = normalizePhone((user.phone || '').trim(), appConfig.defaultCountryCode);
     if (!phoneDigits) return;
 
-    if (typeof shouldSkipUser === 'function' && shouldSkipUser(user, phoneDigits)) {
-      return;
+    if (typeof shouldSkipUser === 'function') {
+      const skip = await shouldSkipUser(user, phoneDigits);
+      if (skip) return;
     }
 
     const sequence = user.sequence || buildSequence(user, messageTemplates);
@@ -146,8 +147,8 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
 async function sendFirstMessageOnly(users, config, opts) {
   const { greenInstanceDbId } = opts || {};
   return sendFirstMessageOnlyWithStore(users, config, opts, state, 'campaign-', {
-    shouldSkipUser(user, phoneDigits) {
-      const existing = state.getState(greenInstanceDbId, phoneDigits);
+    async shouldSkipUser(user, phoneDigits) {
+      const existing = await Promise.resolve(state.getState(greenInstanceDbId, phoneDigits));
       if (existing != null && existing.lastSentIndex >= 1) {
         const cid = String(existing.campaignId || '');
         if (!cid.startsWith('test-')) {
@@ -184,7 +185,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
 
   let userState = null;
   for (const key of uniqueKeys) {
-    userState = store.getState(greenInstanceDbId, key);
+    userState = await Promise.resolve(store.getState(greenInstanceDbId, key));
     if (userState) {
       normalized = key;
       break;

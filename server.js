@@ -1196,7 +1196,7 @@ app.get('/api/state', (req, res) => {
 });
 
 // GET /api/state/:phone – debug: requires ?greenInstanceId=<db id>
-app.get('/api/state/:phone', (req, res) => {
+app.get('/api/state/:phone', async (req, res) => {
   const greenInstanceDbId = String(req.query.greenInstanceId || '').trim();
   if (!greenInstanceDbId) {
     return res.status(400).json({ error: 'Query greenInstanceId is required' });
@@ -1204,7 +1204,7 @@ app.get('/api/state/:phone', (req, res) => {
   const raw = req.params.phone || '';
   const phone = String(raw).replace(/\D/g, '') || raw;
   if (!phone) return res.status(400).json({ error: 'Missing phone' });
-  const data = state.getState(greenInstanceDbId, phone);
+  const data = await state.getState(greenInstanceDbId, phone);
   if (data == null) return res.status(404).json({ error: 'Phone not in campaign for this instance' });
   res.json({
     phone,
@@ -1246,7 +1246,7 @@ app.post('/api/test/reply', async (req, res) => {
   if (!greenInstanceDbId) {
     return res.status(400).json({ success: false, error: 'Missing greenInstanceId' });
   }
-  if (state.getState(greenInstanceDbId, phone) == null) {
+  if ((await state.getState(greenInstanceDbId, phone)) == null) {
     return res.status(400).json({ success: false, error: 'phone not in campaign for this instance' });
   }
   const [trRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [

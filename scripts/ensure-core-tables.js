@@ -4,7 +4,15 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const mysql = require('mysql2/promise');
 
-const REQUIRED = ['users', 'green_instances', 'campaigns', 'campaign_contacts', 'sessions'];
+const REQUIRED = [
+  'users',
+  'green_instances',
+  'campaigns',
+  'campaign_contacts',
+  'sessions',
+  'incoming_messages_log',
+  'conversation_state',
+];
 
 const DDL = {
   users: `CREATE TABLE IF NOT EXISTS users (
@@ -70,6 +78,29 @@ const DDL = {
   data mediumtext COLLATE utf8mb4_bin,
   PRIMARY KEY (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
+
+  incoming_messages_log: `CREATE TABLE IF NOT EXISTS incoming_messages_log (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  green_instance_db_id VARCHAR(64) NOT NULL,
+  provider_message_id VARCHAR(255) NOT NULL,
+  type_webhook VARCHAR(64) NOT NULL,
+  phone_normalized VARCHAR(32) NULL,
+  received_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uniq_msg (green_instance_db_id, provider_message_id, type_webhook),
+  KEY idx_incoming_messages_instance_received (green_instance_db_id, received_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  conversation_state: `CREATE TABLE IF NOT EXISTS conversation_state (
+  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  green_instance_db_id VARCHAR(64) NOT NULL,
+  phone_normalized VARCHAR(32) NOT NULL,
+  last_sent_index INT NOT NULL,
+  campaign_id VARCHAR(255) NULL,
+  sequence_json JSON NOT NULL,
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uniq_state (green_instance_db_id, phone_normalized),
+  KEY idx_conversation_state_updated (green_instance_db_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 };
 
 async function main() {
@@ -88,7 +119,15 @@ async function main() {
   const existing = new Set(tables.map((r) => r.name));
   console.log('SHOW TABLES (current):', [...existing].sort().join(', ') || '(none)');
 
-  const order = ['users', 'green_instances', 'campaigns', 'campaign_contacts', 'sessions'];
+  const order = [
+    'users',
+    'green_instances',
+    'campaigns',
+    'campaign_contacts',
+    'sessions',
+    'incoming_messages_log',
+    'conversation_state',
+  ];
   for (const name of order) {
     if (existing.has(name)) {
       console.log(`OK: ${name} exists`);

@@ -9,6 +9,7 @@ const { onIncomingReply, onIncomingReplyTest } = require('./replyFlow');
 const { resolveGreenApiConfig } = require('./greenInstance');
 const state = require('./state');
 const testState = require('./testState');
+const { insertIncomingMessage } = require('./repositories/incomingMessageRepository');
 
 async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Instance:', greenInstanceDbId);
@@ -42,6 +43,29 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     console.log('[Webhook] Payload preview:', JSON.stringify(body).slice(0, 200));
     return;
   }
+
+  if (parsed.providerMessageId == null || String(parsed.providerMessageId).trim() === '') {
+    console.warn('[Webhook] Missing providerMessageId; skipping processing (idempotency requires message id)');
+    return;
+  }
+
+  let insertResult;
+  try {
+    insertResult = await insertIncomingMessage({
+      greenInstanceDbId,
+      providerMessageId: parsed.providerMessageId,
+      typeWebhook: parsed.typeWebhook || 'incomingMessageReceived',
+      phone: parsed.phone,
+    });
+  } catch (err) {
+    console.error('[Webhook] incoming_messages_log insert failed:', err.message);
+    return;
+  }
+  if (!insertResult.inserted) {
+    console.log('[Webhook] Duplicate message skipped');
+    return;
+  }
+
   console.log('[Webhook] Parsed phone:', parsed.phone);
   const norm = String(parsed.phone || '').replace(/\D/g, '');
   const keyVariants = [...new Set([norm, norm.replace(/^0+/, '')].filter((k) => k && k.length > 0))];
@@ -49,7 +73,7 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   let hasProd = false;
   for (const key of keyVariants) {
     if (testState.getState(greenInstanceDbId, key)) hasTest = true;
-    if (state.getState(greenInstanceDbId, key)) hasProd = true;
+    if (await Promise.resolve(state.getState(greenInstanceDbId, key))) hasProd = true;
   }
   console.log('[Webhook] Test state exists:', hasTest);
   console.log('[Webhook] Prod state exists:', hasProd);
