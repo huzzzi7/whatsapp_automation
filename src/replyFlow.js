@@ -14,6 +14,23 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Parallel map with bounded concurrency (Green API safety). */
+async function runWithConcurrency(items, limit, fn) {
+  const n = items.length;
+  if (n === 0) return;
+  const cap = Math.max(1, Math.min(limit, n));
+  let next = 0;
+  async function worker() {
+    while (true) {
+      const idx = next;
+      next += 1;
+      if (idx >= n) break;
+      await fn(items[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: cap }, () => worker()));
+}
+
 /**
  * @param {string} chatId
  * @param {string} message
@@ -64,55 +81,57 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
 
   const list = Array.isArray(users) ? users : [];
   const delay = Math.max(0, Number(messageDelayMs) || 0);
-  for (let idx = 0; idx < list.length; idx += 1) {
-    try {
-      if (typeof pauseCheck === 'function') {
-        const shouldPause = await pauseCheck();
-        if (shouldPause) {
-          console.log('[Campaign] pauseCheck: stopping mid-batch');
-          break;
-        }
-      }
+  const SEND_FIRST_MESSAGE_CONCURRENCY = 8;
+  let batchPaused = false;
 
-      const user = list[idx];
-      const phoneDigits = normalizePhone((user.phone || '').trim(), appConfig.defaultCountryCode);
-      if (!phoneDigits) continue;
-
-      if (typeof shouldSkipUser === 'function' && shouldSkipUser(user, phoneDigits)) {
-        continue;
-      }
-
-      const sequence = user.sequence || buildSequence(user, messageTemplates);
-      if (!sequence || sequence.length < 1) {
-        console.warn('[Campaign] Invalid message sequence for', phoneDigits);
-        continue;
-      }
-
-      const chatId = toChatId(phoneDigits);
-      if (!chatId) continue;
-
-      const text = sequence[0];
-      if (text == null || String(text).trim() === '') continue;
-
-      console.log('[Campaign] Sending message 1 to', phoneDigits);
-      const sendResult = await safeSend(chatId, text, greenApi);
-      if (sendResult.ok) {
-        store.setState(greenInstanceDbId, phoneDigits, {
-          lastSentIndex: 1,
-          sequence,
-          campaignId,
-        });
-        startedUsers++;
-        sentPhoneDigits.push(phoneDigits);
-      } else if (sendResult.error) {
-        failedSends[phoneDigits] = sendResult.error;
-      }
-    } finally {
-      if (idx < list.length - 1 && delay > 0) {
-        await sleep(delay);
+  await runWithConcurrency(list, SEND_FIRST_MESSAGE_CONCURRENCY, async (user) => {
+    if (batchPaused) return;
+    if (typeof pauseCheck === 'function') {
+      const shouldPause = await pauseCheck();
+      if (shouldPause) {
+        batchPaused = true;
+        console.log('[Campaign] pauseCheck: stopping mid-batch');
+        return;
       }
     }
-  }
+
+    const phoneDigits = normalizePhone((user.phone || '').trim(), appConfig.defaultCountryCode);
+    if (!phoneDigits) return;
+
+    if (typeof shouldSkipUser === 'function' && shouldSkipUser(user, phoneDigits)) {
+      return;
+    }
+
+    const sequence = user.sequence || buildSequence(user, messageTemplates);
+    if (!sequence || sequence.length < 1) {
+      console.warn('[Campaign] Invalid message sequence for', phoneDigits);
+      return;
+    }
+
+    const chatId = toChatId(phoneDigits);
+    if (!chatId) return;
+
+    const text = sequence[0];
+    if (text == null || String(text).trim() === '') return;
+
+    console.log('[Campaign] Sending message 1 to', phoneDigits);
+    const sendResult = await safeSend(chatId, text, greenApi);
+    if (sendResult.ok) {
+      store.setState(greenInstanceDbId, phoneDigits, {
+        lastSentIndex: 1,
+        sequence,
+        campaignId,
+      });
+      startedUsers += 1;
+      sentPhoneDigits.push(phoneDigits);
+    } else if (sendResult.error) {
+      failedSends[phoneDigits] = sendResult.error;
+    }
+
+    if (delay > 0) {
+      await sleep(delay);
+    }
+  });
 
   console.log('[Campaign] Conversations started:', startedUsers);
   return { startedUsers, sentPhoneDigits, failedSends };

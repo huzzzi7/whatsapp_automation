@@ -143,26 +143,109 @@ async function getNextQueuedCampaign() {
 }
 
 /**
- * Atomically promote queued → running only if still queued and schedule is due in DB (UTC).
+ * MySQL ER_UPDATE_TABLE_USED (1093) workaround: derived table so UPDATE campaigns is not combined
+ * with a direct subquery selecting from campaigns in the same statement.
+ */
+const NOT_RUNNING_ON_INSTANCE_SQL = `NOT EXISTS (
+  SELECT 1 FROM (
+    SELECT green_instance_id
+    FROM campaigns
+    WHERE status = 'running'
+  ) AS r
+  WHERE r.green_instance_id = c.green_instance_id
+)`;
+
+/**
+ * Atomically promote queued → running only if still queued, due in DB (UTC), and no other running campaign on same instance.
  * @returns {Promise<number>} affectedRows (1 if this worker claimed the campaign)
  */
 async function promoteQueuedCampaignToRunningIfDue(campaignId) {
+  console.log('[CampaignRepository] Attempting to promote queued campaign:', campaignId);
   const [result] = await pool.execute(
-    `UPDATE campaigns
-     SET status = 'running', error_message = NULL, started_at = COALESCE(started_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?
-       AND status = 'queued'
-       AND (scheduled_at IS NULL OR scheduled_at <= UTC_TIMESTAMP())`,
+    `UPDATE campaigns c
+     SET c.status = 'running', c.error_message = NULL, c.started_at = COALESCE(c.started_at, CURRENT_TIMESTAMP), c.updated_at = CURRENT_TIMESTAMP
+     WHERE c.id = ?
+       AND c.status = 'queued'
+       AND (c.scheduled_at IS NULL OR c.scheduled_at <= UTC_TIMESTAMP())
+       AND ${NOT_RUNNING_ON_INSTANCE_SQL}`,
     [campaignId],
   );
   return Number(result.affectedRows) || 0;
 }
 
-async function getRunningCampaign() {
+/** @returns {Promise<object[]>} all running campaigns, oldest started first */
+async function getRunningCampaigns() {
   const [rows] = await pool.execute(
-    `SELECT * FROM campaigns WHERE status = 'running' ORDER BY started_at ASC LIMIT 1`,
+    `SELECT * FROM campaigns WHERE status = 'running' ORDER BY started_at ASC`,
+  );
+  return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
+}
+
+/**
+ * @param {string} greenInstanceId - green_instances.id (DB)
+ * @returns {Promise<object|null>}
+ */
+async function getRunningCampaignByInstance(greenInstanceId) {
+  const gid = String(greenInstanceId || '').trim();
+  if (!gid) return null;
+  const [rows] = await pool.execute(
+    `SELECT * FROM campaigns WHERE status = 'running' AND green_instance_id = ? ORDER BY started_at ASC LIMIT 1`,
+    [gid],
   );
   return mapCampaignRow(rows[0]);
+}
+
+/** @deprecated Prefer getRunningCampaigns — returns first running row for backward compatibility */
+async function getRunningCampaign() {
+  const list = await getRunningCampaigns();
+  return list[0] || null;
+}
+
+/**
+ * Queued campaigns whose schedule is due, global FIFO order.
+ * @returns {Promise<object[]>}
+ */
+async function getQueuedCampaignsDueOrdered() {
+  const [rows] = await pool.execute(
+    `SELECT * FROM campaigns WHERE status = 'queued'
+     AND (scheduled_at IS NULL OR scheduled_at <= UTC_TIMESTAMP())
+     ORDER BY queue_order ASC, created_at ASC`,
+  );
+  return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
+}
+
+/**
+ * Manual start: queued → running if instance has no running campaign (atomic).
+ * @returns {Promise<number>} affectedRows
+ */
+async function claimQueuedAsRunningIfInstanceFree(campaignId) {
+  console.log('[CampaignRepository] Attempting to claim queued campaign:', campaignId);
+  const [result] = await pool.execute(
+    `UPDATE campaigns c
+     SET c.status = 'running', c.error_message = NULL, c.started_at = COALESCE(c.started_at, CURRENT_TIMESTAMP), c.updated_at = CURRENT_TIMESTAMP
+     WHERE c.id = ?
+       AND c.status = 'queued'
+       AND ${NOT_RUNNING_ON_INSTANCE_SQL}`,
+    [campaignId],
+  );
+  return Number(result.affectedRows) || 0;
+}
+
+/**
+ * Resume: paused → running if instance has no other running campaign (atomic).
+ * @returns {Promise<number>} affectedRows
+ */
+async function claimPausedAsRunningIfInstanceFree(campaignId) {
+  console.log('[CampaignRepository] Attempting to claim paused campaign:', campaignId);
+  const [result] = await pool.execute(
+    `UPDATE campaigns c
+     SET c.status = 'running', c.error_message = NULL, c.updated_at = CURRENT_TIMESTAMP
+     WHERE c.id = ?
+       AND c.status = 'paused'
+       AND ${NOT_RUNNING_ON_INSTANCE_SQL}`,
+    [campaignId],
+  );
+  return Number(result.affectedRows) || 0;
 }
 
 async function getPausedCampaigns() {
@@ -365,6 +448,11 @@ module.exports = {
   getNextQueuedCampaign,
   promoteQueuedCampaignToRunningIfDue,
   getRunningCampaign,
+  getRunningCampaigns,
+  getRunningCampaignByInstance,
+  getQueuedCampaignsDueOrdered,
+  claimQueuedAsRunningIfInstanceFree,
+  claimPausedAsRunningIfInstanceFree,
   getPausedCampaigns,
   getQueuedCampaigns,
   listCampaigns,

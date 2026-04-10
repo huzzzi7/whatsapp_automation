@@ -53,22 +53,29 @@ function firstMessageEmpty(user) {
   return text == null || String(text).trim() === '';
 }
 
+function workerLog(campaignId, greenInstanceDbId, msg, extra) {
+  const base = { campaignId, green_instance_id: greenInstanceDbId };
+  if (extra != null) console.log('[CampaignWorker]', msg, base, extra);
+  else console.log('[CampaignWorker]', msg, base);
+}
+
 async function runCampaignWorker(campaignId) {
   const campaign = await getCampaignById(campaignId);
   if (!campaign) {
     throw new Error(`Campaign not found: ${campaignId}`);
   }
 
+  const greenInstanceDbId = campaign.greenInstanceId;
+
   const [instRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
-    campaign.greenInstanceId,
+    greenInstanceDbId,
   ]);
   const instRow = instRows[0];
   if (!instRow) {
-    throw new Error(`Green instance not found for campaign: ${campaign.greenInstanceId}`);
+    throw new Error(`Green instance not found for campaign: ${greenInstanceDbId}`);
   }
 
   const greenApi = resolveGreenApiConfig(instRow);
-  const greenInstanceDbId = campaign.greenInstanceId;
   const stableCampaignId = `campaign-${campaignId}`;
 
   let batchNum = 0;
@@ -80,11 +87,11 @@ async function runCampaignWorker(campaignId) {
     }
 
     if (current.status === 'paused') {
-      console.log(`[CampaignWorker] Campaign ${campaignId} paused (before batch)`);
+      workerLog(campaignId, greenInstanceDbId, 'paused (before batch)');
       return;
     }
     if (current.status !== 'running') {
-      console.log(`[CampaignWorker] Campaign ${campaignId} stopped (status: ${current.status})`);
+      workerLog(campaignId, greenInstanceDbId, `stopped (status: ${current.status})`);
       return;
     }
 
@@ -96,13 +103,12 @@ async function runCampaignWorker(campaignId) {
 
     if (contacts.length === 0) {
       await updateCampaignStatus(campaignId, 'completed');
-      console.log('[CampaignWorker] Campaign completed:', campaignId);
+      workerLog(campaignId, greenInstanceDbId, 'completed');
       break;
     }
 
     batchNum += 1;
-    console.log(`[CampaignWorker] Processing batch ${batchNum} for campaign ${campaignId}`);
-    console.log(`[CampaignWorker] Sending to ${contacts.length} users`);
+    workerLog(campaignId, greenInstanceDbId, `batch ${batchNum} start`, { recipients: contacts.length });
 
     const users = contactsToUsers(contacts);
 
@@ -110,11 +116,11 @@ async function runCampaignWorker(campaignId) {
       const c = await getCampaignById(campaignId);
       if (!c) return true;
       if (c.status === 'paused') {
-        console.log(`[CampaignWorker] Worker stopped due to pause (mid-batch): ${campaignId}`);
+        workerLog(campaignId, greenInstanceDbId, 'pause (mid-batch)');
         return true;
       }
       if (c.status !== 'running') {
-        console.log(`[CampaignWorker] Worker stopped (status: ${c.status}): ${campaignId}`);
+        workerLog(campaignId, greenInstanceDbId, `stopped mid-batch (status: ${c.status})`);
         return true;
       }
       return false;
@@ -167,9 +173,12 @@ async function runCampaignWorker(campaignId) {
       failed += 1;
     }
 
-    console.log(
-      `[CampaignWorker] Batch ${batchNum} counts: sent=${sent}, failed=${failed}, skipped=${skipped} (batchSize=${contacts.length})`,
-    );
+    workerLog(campaignId, greenInstanceDbId, `batch ${batchNum} done`, {
+      sent,
+      failed,
+      skipped,
+      batchSize: contacts.length,
+    });
     await incrementSentCount(campaignId, sent);
     await incrementFailedCount(campaignId, failed);
     await incrementSkippedCount(campaignId, skipped);
@@ -177,11 +186,11 @@ async function runCampaignWorker(campaignId) {
     const afterBatch = await getCampaignById(campaignId);
     if (!afterBatch) return;
     if (afterBatch.status === 'paused') {
-      console.log(`[CampaignWorker] Campaign ${campaignId} paused (after batch)`);
+      workerLog(campaignId, greenInstanceDbId, 'paused (after batch)');
       return;
     }
     if (afterBatch.status !== 'running') {
-      console.log(`[CampaignWorker] Campaign ${campaignId} stopped after batch (status: ${afterBatch.status})`);
+      workerLog(campaignId, greenInstanceDbId, `stopped after batch (status: ${afterBatch.status})`);
       return;
     }
 

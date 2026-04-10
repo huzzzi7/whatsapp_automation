@@ -3,11 +3,20 @@
  * Keys: `${greenInstanceDbId}:${phone}` — stored in conversation-state.json.
  */
 const fs = require('fs');
+const fsPromises = fs.promises;
 const path = require('path');
 
 const STATE_FILE = path.join(__dirname, '..', 'conversation-state.json');
 
 let _state = null;
+/** Debounced async disk flush so parallel campaign workers do not block the event loop on every send. */
+let _persistTimer = null;
+/** Bumps on each mutating op so we know when cached JSON is stale. */
+let _stateMutationRev = 0;
+/** Reuse stringify when state revision matches and cache is fresh (reduces main-thread JSON.stringify under burst writes). */
+let _cachedSerializedState = null;
+let _serializedCacheRev = -1;
+let _serializedCacheAt = 0;
 
 function makeStateKey(greenInstanceDbId, phone) {
   const id = String(greenInstanceDbId || '').trim();
@@ -37,10 +46,37 @@ function loadState() {
 function saveState() {
   const state = _state !== null ? _state : loadState();
   try {
-    fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    const payload = JSON.stringify(state, null, 2);
+    fs.writeFileSync(STATE_FILE, payload, 'utf8');
+    _cachedSerializedState = payload;
+    _serializedCacheRev = _stateMutationRev;
+    _serializedCacheAt = Date.now();
   } catch (err) {
     console.error('[STATE SAVE ERROR]', err.message);
   }
+}
+
+function schedulePersistState() {
+  if (_persistTimer != null) return;
+  _persistTimer = setTimeout(() => {
+    _persistTimer = null;
+    const st = _state !== null ? _state : loadState();
+    const now = Date.now();
+    const needStringify =
+      _cachedSerializedState == null ||
+      _serializedCacheRev !== _stateMutationRev ||
+      now - _serializedCacheAt > 200;
+    let payload;
+    if (needStringify) {
+      payload = JSON.stringify(st, null, 2);
+      _cachedSerializedState = payload;
+      _serializedCacheRev = _stateMutationRev;
+      _serializedCacheAt = now;
+    } else {
+      payload = _cachedSerializedState;
+    }
+    fsPromises.writeFile(STATE_FILE, payload, 'utf8').catch((err) => console.error('[STATE SAVE ERROR]', err.message));
+  }, 8);
 }
 
 /**
@@ -64,7 +100,8 @@ function setState(greenInstanceDbId, phone, data) {
   const key = makeStateKey(greenInstanceDbId, phone);
   if (!key) return;
   state[key] = data;
-  saveState();
+  _stateMutationRev += 1;
+  schedulePersistState();
 }
 
 /**
@@ -77,7 +114,8 @@ function updateLastSent(greenInstanceDbId, phone, newIndex) {
   const key = makeStateKey(greenInstanceDbId, phone);
   if (!key || state[key] == null) return;
   state[key].lastSentIndex = newIndex;
-  saveState();
+  _stateMutationRev += 1;
+  schedulePersistState();
 }
 
 /**
@@ -91,11 +129,15 @@ function deleteState(greenInstanceDbId, phone) {
   if (!key) return;
   if (st[key] == null) return;
   delete st[key];
-  saveState();
+  _stateMutationRev += 1;
+  schedulePersistState();
 }
 
 function resetState() {
   _state = {};
+  _stateMutationRev += 1;
+  _cachedSerializedState = null;
+  _serializedCacheRev = -1;
   saveState();
 }
 

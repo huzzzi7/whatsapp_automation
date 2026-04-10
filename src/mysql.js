@@ -7,7 +7,7 @@ const pool = mysql.createPool({
   password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'whatsapp',
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit: 25,
   queueLimit: 0,
   // Bind JS Date as UTC components; pair with SET time_zone below so TIMESTAMP matches UTC_TIMESTAMP() in SQL.
   timezone: 'Z',

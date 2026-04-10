@@ -33,7 +33,9 @@ const {
   insertCampaignContacts,
   setTotalContacts,
   getCampaignById,
-  getRunningCampaign,
+  getRunningCampaigns,
+  claimQueuedAsRunningIfInstanceFree,
+  claimPausedAsRunningIfInstanceFree,
   getPausedCampaigns,
   getQueuedCampaigns,
   listCampaigns,
@@ -832,7 +834,7 @@ app.post('/api/campaigns/:id/pause', async (req, res) => {
   }
 });
 
-// POST /api/campaigns/:id/resume – paused → running, start worker if none running
+// POST /api/campaigns/:id/resume – paused → running (per-instance slot enforced atomically in claim)
 app.post('/api/campaigns/:id/resume', async (req, res) => {
   try {
     const c = await getCampaignById(req.params.id);
@@ -842,11 +844,14 @@ app.post('/api/campaigns/:id/resume', async (req, res) => {
     if (c.status !== 'paused') {
       return res.status(400).json({ ok: false, error: 'Only a paused campaign can be resumed.' });
     }
-    const running = await getRunningCampaign();
-    if (running) {
-      return res.status(400).json({ ok: false, error: 'Another campaign is already running.' });
+    const claimed = await claimPausedAsRunningIfInstanceFree(c.id);
+    if (claimed !== 1) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          'Could not resume: another campaign may already be running on this WhatsApp instance, or the campaign is no longer paused.',
+      });
     }
-    await updateCampaignStatus(c.id, 'running');
     console.log('[Campaign] Campaign resumed:', c.id);
     tryRunNext().catch((err) => console.error('[Campaign resume] tryRunNext', err));
     res.json({ ok: true, status: 'running' });
@@ -856,7 +861,7 @@ app.post('/api/campaigns/:id/resume', async (req, res) => {
   }
 });
 
-// POST /api/campaigns/:id/start – queued → running (manual start when no other campaign is running)
+// POST /api/campaigns/:id/start – queued → running (per-instance slot enforced atomically in claim)
 app.post('/api/campaigns/:id/start', async (req, res) => {
   try {
     const c = await getCampaignById(req.params.id);
@@ -866,11 +871,14 @@ app.post('/api/campaigns/:id/start', async (req, res) => {
     if (c.status !== 'queued') {
       return res.status(400).json({ ok: false, error: 'Only a queued campaign can be started manually.' });
     }
-    const running = await getRunningCampaign();
-    if (running) {
-      return res.status(400).json({ ok: false, error: 'Another campaign is already running.' });
+    const claimed = await claimQueuedAsRunningIfInstanceFree(c.id);
+    if (claimed !== 1) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          'Could not start: another campaign may already be running on this WhatsApp instance, or this campaign is no longer queued.',
+      });
     }
-    await updateCampaignStatus(c.id, 'running');
     console.log('[Campaign] Queued campaign started manually:', c.id);
     tryRunNext().catch((err) => console.error('[Campaign start] tryRunNext', err));
     res.json({ ok: true, status: 'running' });
@@ -884,11 +892,13 @@ app.post('/api/campaigns/:id/start', async (req, res) => {
 app.get('/api/campaigns/active', async (req, res) => {
   try {
     console.log('[Campaigns] Fetching active campaigns');
-    const running = await getRunningCampaign();
+    const runningAllRows = await getRunningCampaigns();
+    const runningAll = runningAllRows.map((c) => formatCampaign(c));
     const paused = await getPausedCampaigns();
     const queued = await getQueuedCampaigns();
     res.json({
-      running: running ? formatCampaign(running) : null,
+      running: runningAll[0] ?? null,
+      runningAll,
       paused: paused.map((c) => formatCampaign(c)),
       queued: queued.map((c) => formatCampaign(c)),
     });
@@ -1313,7 +1323,6 @@ app.listen(PORT, '0.0.0.0', () => {
     console.error('[State ERROR]', err.message);
   }
   setInterval(() => {
-    console.log('[Scheduler] Tick at:', new Date().toISOString());
-    tryRunNext().catch((e) => console.error('[Campaign scheduler]', e?.message || e));
-  }, 30000);
+    tryRunNext().catch(console.error);
+  }, 3000);
 });

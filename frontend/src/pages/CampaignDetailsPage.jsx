@@ -112,8 +112,25 @@ function ViewUsersButton({ campaignId, onView }) {
   );
 }
 
+/**
+ * Prefer non-empty `runningAll`; if API sends `runningAll: []` but legacy `running` is set, use `running`.
+ * Avoids treating "no runnings" when one campaign is actually running (mis-synced payloads).
+ */
+function normalizeRunningAll(data) {
+  const runningAll = Array.isArray(data?.runningAll) ? data.runningAll : null;
+  if (runningAll && runningAll.length > 0) return runningAll;
+  if (data?.running) return [data.running];
+  return runningAll || [];
+}
+
+function instanceHasRunning(runningAll, greenInstanceId) {
+  const gid = String(greenInstanceId ?? '').trim();
+  if (!gid) return false;
+  return runningAll.some((r) => String(r?.greenInstanceId ?? '').trim() === gid);
+}
+
 export default function CampaignDetailsPage() {
-  const [active, setActive] = useState({ running: null, paused: [], queued: [] });
+  const [active, setActive] = useState({ runningAll: [], paused: [], queued: [] });
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -129,7 +146,7 @@ export default function CampaignDetailsPage() {
     try {
       const data = await getActiveCampaigns();
       setActive({
-        running: data?.running ?? null,
+        runningAll: normalizeRunningAll(data),
         paused: Array.isArray(data?.paused) ? data.paused : [],
         queued: Array.isArray(data?.queued) ? data.queued : [],
       });
@@ -158,7 +175,7 @@ export default function CampaignDetailsPage() {
   }, [loadActive, loadHistory]);
 
   const shouldPoll =
-    Boolean(active.running) ||
+    (Array.isArray(active.runningAll) && active.runningAll.length > 0) ||
     (Array.isArray(active.paused) && active.paused.length > 0) ||
     (Array.isArray(active.queued) && active.queued.length > 0);
 
@@ -170,12 +187,12 @@ export default function CampaignDetailsPage() {
     return () => clearInterval(id);
   }, [shouldPoll, loadActive]);
 
-  const hasRunning = Boolean(active.running);
+  const runningList = active.runningAll || [];
   const pausedList = active.paused || [];
   const queuedList = active.queued || [];
 
   const hasActiveData =
-    Boolean(active?.running) ||
+    (Array.isArray(active?.runningAll) && active.runningAll.length > 0) ||
     (Array.isArray(active?.paused) && active.paused.length > 0) ||
     (Array.isArray(active?.queued) && active.queued.length > 0);
 
@@ -218,19 +235,21 @@ export default function CampaignDetailsPage() {
     }
   };
 
-  const renderRunningCard = () => {
-    const c = active.running;
-    if (!c) {
-      return <p className="campaign-details__empty">No active campaign</p>;
+  const renderRunningCards = () => {
+    if (!runningList.length) {
+      return <p className="campaign-details__empty">No running campaigns</p>;
     }
-    return (
-      <div className="campaign-details__active-card">
+    return runningList.map((c) => (
+      <div key={c.id} className="campaign-details__active-card">
         <div className="campaign-details__card-head">
           <CampaignTitle c={c} />
           <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
         </div>
         <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <StatusBadge status={c.status} />
+          <span className="campaign-details__queue-meta">
+            Instance <code className="campaign-details__table-id">{c.greenInstanceId || '—'}</code>
+          </span>
         </div>
         <p className="campaign-details__stats" style={{ marginTop: '0.75rem' }}>
           Sent <strong>{c.sentCount}</strong>
@@ -255,45 +274,48 @@ export default function CampaignDetailsPage() {
           </Button>
         </div>
       </div>
-    );
+    ));
   };
 
   const renderPausedCards = () => {
     if (!pausedList.length) {
       return <p className="campaign-details__empty muted">No paused campaigns</p>;
     }
-    return pausedList.map((c) => (
-      <div key={c.id} className="campaign-details__active-card campaign-details__active-card--secondary">
-        <div className="campaign-details__card-head">
-          <CampaignTitle c={c} />
-          <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+    return pausedList.map((c) => {
+      const blocked = instanceHasRunning(runningList, c.greenInstanceId);
+      return (
+        <div key={c.id} className="campaign-details__active-card campaign-details__active-card--secondary">
+          <div className="campaign-details__card-head">
+            <CampaignTitle c={c} />
+            <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+          </div>
+          <div style={{ marginTop: '0.5rem' }}>
+            <StatusBadge status={c.status} />
+            <span className="campaign-details__queue-meta"> Queue order #{c.queueOrder}</span>
+          </div>
+          <p className="campaign-details__stats" style={{ marginTop: '0.5rem' }}>
+            Sent {c.sentCount} · Failed {campaignFailedCount(c)} · Skipped {campaignSkippedCount(c)} · Total{' '}
+            {c.totalContacts} · Remaining {c.remaining}
+          </p>
+          <ProgressBar percent={campaignProgressPercent(c)} />
+          <div style={{ marginTop: '0.75rem' }}>
+            <Button
+              type="button"
+              className="ui-button--inline"
+              onClick={() => handleResume(c.id)}
+              disabled={actionBusy || blocked}
+            >
+              Resume
+            </Button>
+            {blocked ? (
+              <span className="campaign-details__hint" style={{ marginLeft: '0.5rem' }}>
+                Another campaign is running on this instance.
+              </span>
+            ) : null}
+          </div>
         </div>
-        <div style={{ marginTop: '0.5rem' }}>
-          <StatusBadge status={c.status} />
-          <span className="campaign-details__queue-meta"> Queue order #{c.queueOrder}</span>
-        </div>
-        <p className="campaign-details__stats" style={{ marginTop: '0.5rem' }}>
-          Sent {c.sentCount} · Failed {campaignFailedCount(c)} · Skipped {campaignSkippedCount(c)} · Total{' '}
-          {c.totalContacts} · Remaining {c.remaining}
-        </p>
-        <ProgressBar percent={campaignProgressPercent(c)} />
-        <div style={{ marginTop: '0.75rem' }}>
-          <Button
-            type="button"
-            className="ui-button--inline"
-            onClick={() => handleResume(c.id)}
-            disabled={actionBusy || hasRunning}
-          >
-            Resume
-          </Button>
-          {hasRunning ? (
-            <span className="campaign-details__hint" style={{ marginLeft: '0.5rem' }}>
-              Another campaign is running.
-            </span>
-          ) : null}
-        </div>
-      </div>
-    ));
+      );
+    });
   };
 
   return (
@@ -311,7 +333,7 @@ export default function CampaignDetailsPage() {
             <h2 className="campaign-details__section-title">Active</h2>
 
             <h3 className="campaign-details__subsection-title">Running</h3>
-            {loading ? <p className="muted">Loading…</p> : renderRunningCard()}
+            {loading ? <p className="muted">Loading…</p> : renderRunningCards()}
 
             <h3 className="campaign-details__subsection-title" style={{ marginTop: '1.5rem' }}>
               Paused
@@ -327,32 +349,48 @@ export default function CampaignDetailsPage() {
               <p className="campaign-details__empty">Queue is empty</p>
             ) : (
               <ul className="campaign-details__queue-list">
-                {queuedList.map((c) => (
-                  <li key={c.id} className="campaign-details__queue-item">
-                    <div>
-                      <CampaignTitle c={c} />
-                      <div className="campaign-details__queue-meta">
-                        <StatusBadge status="queued" /> Order #{c.queueOrder}
+                {queuedList.map((c) => {
+                  const startBlocked = instanceHasRunning(runningList, c.greenInstanceId);
+                  if (import.meta.env.DEV) {
+                    console.log('Start check:', {
+                      campaignId: c.id,
+                      instance: c.greenInstanceId,
+                      startBlocked,
+                      runningList,
+                    });
+                  }
+                  return (
+                    <li key={c.id} className="campaign-details__queue-item">
+                      <div>
+                        <CampaignTitle c={c} />
+                        <div className="campaign-details__queue-meta">
+                          <StatusBadge status="queued" /> Order #{c.queueOrder}
+                        </div>
+                        {c.status === 'queued' && c.scheduledAt ? (
+                          <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
+                            Scheduled for: {formatScheduledUk(c.scheduledAt)}
+                          </p>
+                        ) : null}
+                        {startBlocked ? (
+                          <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
+                            Start blocked: a campaign is already running on this instance.
+                          </p>
+                        ) : null}
                       </div>
-                      {c.status === 'queued' && c.scheduledAt ? (
-                        <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
-                          Scheduled for: {formatScheduledUk(c.scheduledAt)}
-                        </p>
-                      ) : null}
-                    </div>
-                    <div className="campaign-details__queue-actions">
-                      <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
-                      <Button
-                        type="button"
-                        className="ui-button--inline ui-button--secondary"
-                        onClick={() => handleStartQueued(c.id)}
-                        disabled={actionBusy || hasRunning}
-                      >
-                        Start
-                      </Button>
-                    </div>
-                  </li>
-                ))}
+                      <div className="campaign-details__queue-actions">
+                        <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+                        <Button
+                          type="button"
+                          className="ui-button--inline ui-button--secondary"
+                          onClick={() => handleStartQueued(c.id)}
+                          disabled={actionBusy || startBlocked}
+                        >
+                          Start
+                        </Button>
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </Card>
