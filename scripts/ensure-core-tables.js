@@ -85,8 +85,10 @@ const DDL = {
   provider_message_id VARCHAR(255) NOT NULL,
   type_webhook VARCHAR(64) NOT NULL,
   phone_normalized VARCHAR(32) NULL,
+  dedupe_key VARCHAR(255) NOT NULL,
   received_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   UNIQUE KEY uniq_msg (green_instance_db_id, provider_message_id, type_webhook),
+  UNIQUE KEY uniq_dedupe (dedupe_key),
   KEY idx_incoming_messages_instance_received (green_instance_db_id, received_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
@@ -151,7 +153,41 @@ async function main() {
   }
 
   console.log('All required tables present:', REQUIRED.join(', '));
+
+  await ensureIncomingMessagesDedupeKey(conn);
+
   await conn.end();
+}
+
+/** Upgrade older incoming_messages_log rows: add dedupe_key + uniq_dedupe (keeps uniq_msg). */
+async function ensureIncomingMessagesDedupeKey(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  const [colRows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'incoming_messages_log' AND COLUMN_NAME = 'dedupe_key'`,
+    [schema],
+  );
+  if (Number(colRows[0]?.cnt) === 0) {
+    console.log('MIGRATE: incoming_messages_log — adding dedupe_key column');
+    await conn.query('ALTER TABLE incoming_messages_log ADD COLUMN dedupe_key VARCHAR(255) NULL');
+    await conn.query(
+      `UPDATE incoming_messages_log SET dedupe_key = CONCAT('migrated-', LPAD(id, 20, '0')) WHERE dedupe_key IS NULL`,
+    );
+    await conn.query('ALTER TABLE incoming_messages_log MODIFY dedupe_key VARCHAR(255) NOT NULL');
+  }
+
+  const [idxRows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.STATISTICS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'incoming_messages_log' AND INDEX_NAME = 'uniq_dedupe'`,
+    [schema],
+  );
+  if (Number(idxRows[0]?.cnt) === 0) {
+    console.log('MIGRATE: incoming_messages_log — adding UNIQUE KEY uniq_dedupe');
+    await conn.query('ALTER TABLE incoming_messages_log ADD UNIQUE KEY uniq_dedupe (dedupe_key)');
+  }
 }
 
 main().catch((e) => {

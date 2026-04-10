@@ -3,6 +3,7 @@
  * @param {Buffer} rawBuffer
  * @param {string} greenInstanceDbId - green_instances.id
  */
+const crypto = require('crypto');
 const pool = require('./mysql');
 const { parseIncomingNotification } = require('./receive');
 const { onIncomingReply, onIncomingReplyTest } = require('./replyFlow');
@@ -10,6 +11,32 @@ const { resolveGreenApiConfig } = require('./greenInstance');
 const state = require('./state');
 const testState = require('./testState');
 const { insertIncomingMessage } = require('./repositories/incomingMessageRepository');
+
+/**
+ * Green API timestamps are usually Unix seconds; Date.now() is ms. Normalize to ms then bucket by 5s.
+ * @param {number} rawTs
+ */
+function roundedTimestampBucket(rawTs) {
+  let t = Number(rawTs);
+  if (!Number.isFinite(t)) {
+    t = Date.now();
+  }
+  const ms = t < 1e12 ? Math.round(t * 1000) : Math.round(t);
+  return Math.floor(ms / 5000);
+}
+
+/**
+ * @param {string} greenInstanceDbId
+ * @param {string} phone
+ * @param {string} text
+ * @param {number} timestamp
+ */
+function buildDedupeKey(greenInstanceDbId, phone, text, timestamp) {
+  const normalizedText = String(text ?? '').trim().toLowerCase();
+  const bucket = roundedTimestampBucket(timestamp);
+  const input = `${String(greenInstanceDbId).trim()}:${String(phone).trim()}:${normalizedText}:${bucket}`;
+  return crypto.createHash('md5').update(input, 'utf8').digest('hex');
+}
 
 async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Instance:', greenInstanceDbId);
@@ -44,25 +71,36 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     return;
   }
 
-  if (parsed.providerMessageId == null || String(parsed.providerMessageId).trim() === '') {
-    console.warn('[Webhook] Missing providerMessageId; skipping processing (idempotency requires message id)');
-    return;
-  }
+  const dedupeKey = buildDedupeKey(greenInstanceDbId, parsed.phone, parsed.text, parsed.timestamp);
+  const providerForDb =
+    parsed.providerMessageId != null && String(parsed.providerMessageId).trim() !== ''
+      ? String(parsed.providerMessageId).trim()
+      : `noid-${dedupeKey}`;
+
+  console.log('[Webhook Debug]', {
+    phone: parsed.phone,
+    text: parsed.text,
+    providerMessageId: parsed.providerMessageId,
+    typeWebhook: parsed.typeWebhook,
+    timestamp: parsed.timestamp,
+    dedupeKey,
+  });
 
   let insertResult;
   try {
     insertResult = await insertIncomingMessage({
       greenInstanceDbId,
-      providerMessageId: parsed.providerMessageId,
-      typeWebhook: parsed.typeWebhook || 'incomingMessageReceived',
+      providerMessageId: providerForDb,
+      typeWebhook: parsed.typeWebhook,
       phone: parsed.phone,
+      dedupeKey,
     });
   } catch (err) {
     console.error('[Webhook] incoming_messages_log insert failed:', err.message);
     return;
   }
   if (!insertResult.inserted) {
-    console.log('[Webhook] Duplicate message skipped');
+    console.log('[Webhook] Duplicate blocked via dedupe_key');
     return;
   }
 

@@ -5,11 +5,13 @@
 const config = require('../config');
 const { normalizePhone, toChatId } = require('./phone');
 
+const INCOMING_TYPE = 'incomingMessageReceived';
+
 function parseIncomingNotification(body) {
   if (!body || typeof body !== 'object') return null;
   const payload = body.body || body;
 
-  if (payload.typeWebhook !== 'incomingMessageReceived') {
+  if (payload.typeWebhook !== INCOMING_TYPE) {
     console.log('[Webhook] Ignored type:', payload.typeWebhook);
     return null;
   }
@@ -47,15 +49,20 @@ function parseIncomingNotification(body) {
     text = messageData.textMessageData.textMessage || '';
   }
 
-  const typeWebhook = payload.typeWebhook != null ? String(payload.typeWebhook) : 'incomingMessageReceived';
+  const rawTs = payload.timestamp;
+  let timestamp = Number(rawTs);
+  if (!Number.isFinite(timestamp)) {
+    timestamp = Date.now();
+  }
 
   return {
     phone: normalized,
     chatId: toChatId(normalized),
     text,
     providerMessageId,
-    typeWebhook,
+    typeWebhook: INCOMING_TYPE,
+    timestamp,
   };
 }
 
-module.exports = { parseIncomingNotification };
+module.exports = { parseIncomingNotification, INCOMING_TYPE };

@@ -4,10 +4,16 @@
 const pool = require('../mysql');
 
 /**
- * @param {{ greenInstanceDbId: string, providerMessageId: string, typeWebhook: string, phone?: string|null }} params
+ * @param {{
+ *   greenInstanceDbId: string,
+ *   providerMessageId: string,
+ *   typeWebhook: string,
+ *   phone?: string|null,
+ *   dedupeKey: string,
+ * }} params
  * @returns {Promise<{ inserted: boolean }>}
  */
-async function insertIncomingMessage({ greenInstanceDbId, providerMessageId, typeWebhook, phone }) {
+async function insertIncomingMessage({ greenInstanceDbId, providerMessageId, typeWebhook, phone, dedupeKey }) {
   try {
     await pool.execute(
       `INSERT INTO incoming_messages_log (
@@ -15,13 +21,15 @@ async function insertIncomingMessage({ greenInstanceDbId, providerMessageId, typ
         provider_message_id,
         type_webhook,
         phone_normalized,
+        dedupe_key,
         received_at
-      ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP(3))`,
+      ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP(3))`,
       [
         String(greenInstanceDbId || '').trim(),
         String(providerMessageId || '').trim(),
         String(typeWebhook || '').trim(),
         phone != null && String(phone).trim() !== '' ? String(phone).trim() : null,
+        String(dedupeKey || '').trim(),
       ],
     );
     return { inserted: true };
