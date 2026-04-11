@@ -69,17 +69,44 @@ async function upsertState(instanceId, phone, data) {
 }
 
 /**
+ * Optimistic lock: advance last_sent_index only if it still matches expectedIndex.
+ * @param {string} instanceId
+ * @param {string} phone
+ * @param {number} newIndex
+ * @param {number} expectedIndex
+ * @returns {Promise<{ success: boolean }>}
+ */
+async function updateLastSent(instanceId, phone, newIndex, expectedIndex) {
+  const gid = String(instanceId || '').trim();
+  const p = String(phone || '').trim();
+  if (!gid || !p) return { success: false };
+  const newIdx = Math.floor(Number(newIndex) || 0);
+  const expected = Math.floor(Number(expectedIndex) || 0);
+  const [result] = await pool.execute(
+    `UPDATE conversation_state
+     SET last_sent_index = ?, updated_at = NOW(3)
+     WHERE green_instance_db_id = ?
+       AND phone_normalized = ?
+       AND last_sent_index = ?`,
+    [newIdx, gid, p, expected],
+  );
+  const affected = result && typeof result.affectedRows === 'number' ? result.affectedRows : 0;
+  return { success: affected === 1 };
+}
+
+/**
+ * Unconditional update (e.g. legacy sync state.updateLastSent / dual-write helpers).
  * @param {string} instanceId
  * @param {string} phone
  * @param {number} index
  */
-async function updateLastSent(instanceId, phone, index) {
+async function updateLastSentUnconditional(instanceId, phone, index) {
   const gid = String(instanceId || '').trim();
   const p = String(phone || '').trim();
   if (!gid || !p) return;
   const idx = Math.floor(Number(index) || 0);
   await pool.execute(
-    `UPDATE conversation_state SET last_sent_index = ? WHERE green_instance_db_id = ? AND phone_normalized = ?`,
+    `UPDATE conversation_state SET last_sent_index = ?, updated_at = NOW(3) WHERE green_instance_db_id = ? AND phone_normalized = ?`,
     [idx, gid, p],
   );
 }
@@ -102,5 +129,6 @@ module.exports = {
   getState,
   upsertState,
   updateLastSent,
+  updateLastSentUnconditional,
   deleteState,
 };

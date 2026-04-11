@@ -66,6 +66,26 @@ function updateLastSent(greenInstanceDbId, phone, newIndex) {
   saveState();
 }
 
+/**
+ * In-memory optimistic lock for test store (no MySQL).
+ * @param {string} greenInstanceDbId
+ * @param {string} phone
+ * @param {number} expectedIndex
+ * @param {number} newIndex
+ * @returns {{ success: boolean }}
+ */
+function tryAdvanceLastSent(greenInstanceDbId, phone, expectedIndex, newIndex) {
+  const st = loadState();
+  const key = makeStateKey(greenInstanceDbId, phone);
+  if (!key || st[key] == null) return { success: false };
+  const exp = Math.floor(Number(expectedIndex) || 0);
+  const next = Math.floor(Number(newIndex) || 0);
+  if (st[key].lastSentIndex !== exp) return { success: false };
+  st[key].lastSentIndex = next;
+  saveState();
+  return { success: true };
+}
+
 function deleteState(greenInstanceDbId, phone) {
   const st = loadState();
   const key = makeStateKey(greenInstanceDbId, phone);
@@ -87,6 +107,7 @@ module.exports = {
   getState,
   setState,
   updateLastSent,
+  tryAdvanceLastSent,
   deleteState,
   resetState,
 };

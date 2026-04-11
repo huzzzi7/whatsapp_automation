@@ -49,7 +49,7 @@ async function safeSend(chatId, message, greenApi) {
 }
 
 /**
- * @typedef {{ getState: Function, setState: Function, updateLastSent: Function, deleteState: Function }} StateStore
+ * @typedef {{ getState: Function, setState: Function, updateLastSent: Function, tryAdvanceLastSent?: Function, deleteState: Function }} StateStore
  */
 
 /**
@@ -218,11 +218,27 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
   const text = sequence[nextIndex];
   if (text == null || String(text).trim() === '') {
     const newIndex = nextIndex + 1;
-    if (newIndex >= sequence.length) {
-      store.deleteState(greenInstanceDbId, normalized);
-      console.log(`[${logPrefix}] Conversation completed for`, normalized);
+    if (typeof store.tryAdvanceLastSent === 'function') {
+      const advance = await Promise.resolve(
+        store.tryAdvanceLastSent(greenInstanceDbId, normalized, nextIndex, newIndex),
+      );
+      if (!advance.success) {
+        console.log('[LOCK] Skipped duplicate execution');
+        console.log('[LOCK] Skipped due to race condition');
+        return;
+      }
+      console.log('[LOCK] Acquired for', normalized);
+      if (newIndex >= sequence.length) {
+        store.deleteState(greenInstanceDbId, normalized);
+        console.log(`[${logPrefix}] Conversation completed for`, normalized);
+      }
     } else {
-      store.updateLastSent(greenInstanceDbId, normalized, newIndex);
+      if (newIndex >= sequence.length) {
+        store.deleteState(greenInstanceDbId, normalized);
+        console.log(`[${logPrefix}] Conversation completed for`, normalized);
+      } else {
+        store.updateLastSent(greenInstanceDbId, normalized, newIndex);
+      }
     }
     return;
   }
@@ -230,11 +246,29 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
   const chatId = toChatId(normalized);
   if (!chatId) return;
 
+  const currentIndex = userState.lastSentIndex;
+  if (typeof store.tryAdvanceLastSent === 'function') {
+    const advanceSend = await Promise.resolve(
+      store.tryAdvanceLastSent(greenInstanceDbId, normalized, currentIndex, currentIndex + 1),
+    );
+    if (!advanceSend.success) {
+      console.log('[LOCK] Skipped duplicate execution');
+      console.log('[LOCK] Skipped due to race condition');
+      return;
+    }
+    console.log('[LOCK] Acquired for', normalized);
+  }
+
   console.log(`[${logPrefix}] Sending message`, nextIndex + 1, '/', sequence.length, 'to', normalized);
   const sendResult = await safeSend(chatId, text, greenApi);
   if (sendResult.ok) {
-    const newIndex = nextIndex + 1;
-    if (newIndex >= sequence.length) {
+    const newIndex = currentIndex + 1;
+    if (typeof store.tryAdvanceLastSent === 'function') {
+      if (newIndex >= sequence.length) {
+        store.deleteState(greenInstanceDbId, normalized);
+        console.log(`[${logPrefix}] Conversation completed for`, normalized);
+      }
+    } else if (newIndex >= sequence.length) {
       store.deleteState(greenInstanceDbId, normalized);
       console.log(`[${logPrefix}] Conversation completed for`, normalized);
     } else {

@@ -94,7 +94,7 @@ function dualWriteMysqlUpsert(greenInstanceDbId, phone, data) {
 
 function dualWriteMysqlUpdateLastSent(greenInstanceDbId, phone, newIndex) {
   conversationStateRepository
-    .updateLastSent(greenInstanceDbId, phone, newIndex)
+    .updateLastSentUnconditional(greenInstanceDbId, phone, newIndex)
     .then(() => {
       console.log('[STATE] Dual write success');
     })
@@ -174,6 +174,45 @@ function updateLastSent(greenInstanceDbId, phone, newIndex) {
 }
 
 /**
+ * Optimistic lock: advance index in MySQL only if last_sent_index === expectedIndex; sync file cache on success.
+ * @param {string} greenInstanceDbId
+ * @param {string} phone
+ * @param {number} expectedIndex
+ * @param {number} newIndex
+ * @returns {Promise<{ success: boolean }>}
+ */
+async function tryAdvanceLastSent(greenInstanceDbId, phone, expectedIndex, newIndex) {
+  const key = makeStateKey(greenInstanceDbId, phone);
+  if (!key) return { success: false };
+  try {
+    const { success } = await conversationStateRepository.updateLastSent(
+      greenInstanceDbId,
+      phone,
+      newIndex,
+      expectedIndex,
+    );
+    if (success) {
+      loadState();
+      if (_state[key] == null) {
+        _state[key] = {
+          lastSentIndex: newIndex,
+          sequence: [],
+          campaignId: undefined,
+        };
+      } else {
+        _state[key].lastSentIndex = newIndex;
+      }
+      _stateMutationRev += 1;
+      schedulePersistState();
+    }
+    return { success };
+  } catch (err) {
+    console.error('[STATE] tryAdvanceLastSent MySQL error:', err.message);
+    return { success: false };
+  }
+}
+
+/**
  * Remove conversation state for one (instance, phone) pair.
  * @param {string} greenInstanceDbId
  * @param {string} phone - Normalized phone
@@ -204,6 +243,7 @@ module.exports = {
   getState,
   setState,
   updateLastSent,
+  tryAdvanceLastSent,
   deleteState,
   resetState,
 };
