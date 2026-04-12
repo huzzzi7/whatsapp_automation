@@ -122,12 +122,19 @@ app.post(
   '/api/webhook/greenapi/:greenInstanceDbId',
   express.raw({ type: '*/*', limit: '5mb' }),
   (req, res) => {
-    console.log('[Webhook] Notification received for instance', req.params.greenInstanceDbId);
+    const greenInstanceDbId = String(req.params.greenInstanceDbId || '').trim();
+    const rawBuffer = req.body;
+    let bodyPreview = '';
+    if (Buffer.isBuffer(rawBuffer) && rawBuffer.length > 0) {
+      bodyPreview = rawBuffer.toString('utf8').slice(0, 2000);
+    }
+    console.log('[WEBHOOK_DEBUG] Incoming webhook body (raw slice):', bodyPreview);
+    console.log('[WEBHOOK_DEBUG] Instance resolution result:', greenInstanceDbId || null);
+    console.log('[WEBHOOK_DEBUG] has valid instance:', Boolean(greenInstanceDbId));
+    console.log('[Webhook] Notification received for instance', greenInstanceDbId);
     console.log('[Webhook] Content-Type:', req.get('Content-Type'));
     res.sendStatus(200);
 
-    const greenInstanceDbId = req.params.greenInstanceDbId;
-    const rawBuffer = req.body;
     setImmediate(() => {
       processGreenApiWebhook(rawBuffer, greenInstanceDbId).catch((err) => {
         console.error('[Webhook] Parse or process error:', err.message);
@@ -140,43 +147,40 @@ app.post(
 // Also accepts legacy/short paths used by some deployments: /api/greenapi and /greenapi
 function handleGreenApiWebhookNoId(req, res) {
   (async () => {
-      console.log(
-        '[Webhook] Fallback route hit:',
-        req.method,
-        req.originalUrl || req.url,
-        'bytes:',
-        Buffer.isBuffer(req.body) ? req.body.length : 0,
-      );
-      let body = null;
-      if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-        try {
-          body = JSON.parse(req.body.toString('utf8'));
-        } catch (_) {
-          /* handled below */
-        }
-      }
+    console.log(
+      '[Webhook] Fallback route hit:',
+      req.method,
+      req.originalUrl || req.url,
+      'bytes:',
+      Buffer.isBuffer(req.body) ? req.body.length : 0,
+    );
+    let body = null;
+    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
       try {
-        const dbInstanceId = await resolveGreenInstanceDbIdFromWebhookBody(body);
-        if (dbInstanceId) {
-          console.warn(
-            '[Webhook] FALLBACK: URL had no /:id; routed using Green API instanceData.idInstance → DB id',
-            dbInstanceId,
-          );
-          console.warn(
-            `[Webhook] Prefer configuring Green API to: POST .../api/webhook/greenapi/${dbInstanceId} (explicit instance).`,
-          );
-          res.sendStatus(200);
-          setImmediate(() => {
-            processGreenApiWebhook(req.body, dbInstanceId).catch((err) => {
-              console.error('[Webhook] Parse or process error:', err.message);
-            });
-          });
-          return;
-        }
-      } catch (e) {
-        console.error('[Webhook] Fallback resolution error:', e.message);
+        body = JSON.parse(req.body.toString('utf8'));
+      } catch (_) {
+        /* handled below */
       }
+    }
+    const bodyForLog =
+      body != null
+        ? JSON.stringify(body).slice(0, 2000)
+        : Buffer.isBuffer(req.body) && req.body.length > 0
+          ? req.body.toString('utf8').slice(0, 500)
+          : '(empty or non-JSON)';
+    console.log('[WEBHOOK_DEBUG] Incoming webhook body:', bodyForLog);
 
+    let dbInstanceId = null;
+    try {
+      dbInstanceId = await resolveGreenInstanceDbIdFromWebhookBody(body);
+    } catch (e) {
+      console.error('[Webhook] Fallback resolution error:', e.message);
+    }
+    console.log('[WEBHOOK_DEBUG] Instance resolution result:', dbInstanceId);
+    console.log('[WEBHOOK_DEBUG] has valid instance:', Boolean(dbInstanceId));
+
+    if (!dbInstanceId) {
+      console.error('[WEBHOOK_ERROR] Cannot resolve instance from webhook');
       console.warn(
         `[Webhook] MISCONFIGURED: received POST ${req.originalUrl || req.url} without instance id in the path.`,
       );
@@ -189,13 +193,29 @@ function handleGreenApiWebhookNoId(req, res) {
       if (Buffer.isBuffer(req.body) && req.body.length > 0) {
         console.warn('[Webhook] Body preview (first 200 chars):', req.body.toString('utf8').slice(0, 200));
       }
-      res.status(410).json({
-        error:
-          'Configure Green API webhook URL as POST /api/webhook/greenapi/<id> where <id> is your Green instance id from Settings.',
+      if (!res.headersSent) {
+        res.status(200).json({ ok: false, error: 'instance_resolution_failed' });
+      }
+      return;
+    }
+
+    console.warn(
+      '[Webhook] FALLBACK: URL had no /:id; routed using Green API instanceData.idInstance → DB id',
+      dbInstanceId,
+    );
+    console.warn(
+      `[Webhook] Prefer configuring Green API to: POST .../api/webhook/greenapi/${dbInstanceId} (explicit instance).`,
+    );
+    if (!res.headersSent) res.sendStatus(200);
+    console.log('[WEBHOOK_DEBUG] has valid instance:', true);
+    setImmediate(() => {
+      processGreenApiWebhook(req.body, dbInstanceId).catch((err) => {
+        console.error('[Webhook] Parse or process error:', err.message);
       });
+    });
   })().catch((e) => {
     console.error('[Webhook] Unhandled fallback error:', e);
-    if (!res.headersSent) res.status(500).json({ error: 'Webhook handler error' });
+    if (!res.headersSent) res.status(200).json({ ok: false, error: 'webhook_handler_error' });
   });
 }
 

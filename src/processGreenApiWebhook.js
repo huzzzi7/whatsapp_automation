@@ -54,7 +54,12 @@ function buildDedupeKey(greenInstanceDbId, phone, text, timestamp, providerMessa
 }
 
 async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
+  console.log('[WEBHOOK_DEBUG] processGreenApiWebhook entry', {
+    greenInstanceDbId,
+    rawBytes: Buffer.isBuffer(rawBuffer) ? rawBuffer.length : 0,
+  });
   console.log('[Webhook] Instance:', greenInstanceDbId);
+  console.log('[WEBHOOK_DEBUG] Instance resolution result:', greenInstanceDbId);
 
   const [rows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [greenInstanceDbId]);
   const row = rows[0];
@@ -77,6 +82,7 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     console.log('[Webhook] Body keys: (empty or invalid)');
     return;
   }
+  console.log('[WEBHOOK_DEBUG] Incoming webhook body:', JSON.stringify(body).slice(0, 2000));
   console.log('[Webhook] Raw body:', JSON.stringify(body).slice(0, 300));
   console.log('[Webhook] Body keys:', Object.keys(body).join(', '));
   const parsed = parseIncomingNotification(body);
@@ -194,7 +200,17 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   }
   console.log('[Webhook] Test state exists:', hasTest);
   console.log('[Webhook] Prod state exists:', hasProd);
+  console.log('[REPLYFLOW_CHECK]', {
+    hasTest,
+    hasProd,
+    phone: parsed.phone,
+    keyVariants,
+    instanceId: greenInstanceDbId,
+  });
   if (!hasTest && !hasProd) {
+    console.log('[REPLYFLOW_SKIPPED_REASON]', {
+      reason: !hasProd && !hasTest ? 'no_conversation_state' : 'unknown',
+    });
     const preview = JSON.stringify(body).slice(0, 500);
     console.warn('[Automation BLOCKED] No conversation state found', {
       greenInstanceDbId,

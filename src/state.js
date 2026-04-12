@@ -2,13 +2,22 @@
  * Conversation state: persist progress per (greenInstanceDbId, phone).
  * Keys: `${greenInstanceDbId}:${phone}` — stored in conversation-state.json.
  * Dual-write: same data upserted to MySQL conversation_state; getState reads MySQL first, then file.
+ *
+ * Production: when NODE_ENV=production and CONVERSATION_STATE_USE_FILE is not "true", skip file
+ * persistence and file fallback reads so MySQL is the source of truth (Hostinger-friendly).
  */
 const fs = require('fs');
 const fsPromises = fs.promises;
 const path = require('path');
+const appConfig = require('../config');
+const { normalizePhone } = require('./phone');
 const conversationStateRepository = require('./repositories/conversationStateRepository');
 
 const STATE_FILE = path.join(__dirname, '..', 'conversation-state.json');
+
+/** MySQL-only mode: no file read fallback in getState, no disk writes from state.js */
+const mysqlOnly =
+  process.env.NODE_ENV === 'production' && String(process.env.CONVERSATION_STATE_USE_FILE || '').trim() !== 'true';
 
 let _state = null;
 /** Debounced async disk flush so parallel campaign workers do not block the event loop on every send. */
@@ -27,8 +36,23 @@ function makeStateKey(greenInstanceDbId, phone) {
   return `${id}:${p}`;
 }
 
+function logStateKey(greenInstanceDbId, phone, context) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  const normalizedPhone = normalizePhone(digits, appConfig.defaultCountryCode) || digits || String(phone || '').trim();
+  console.log('[STATE_KEY]', {
+    context: context || 'state',
+    greenInstanceDbId,
+    phoneRaw: phone,
+    normalizedPhone,
+  });
+}
+
 function loadState() {
   if (_state !== null) return _state;
+  if (mysqlOnly) {
+    _state = {};
+    return _state;
+  }
   try {
     const raw = fs.readFileSync(STATE_FILE, 'utf8');
     _state = JSON.parse(raw);
@@ -46,6 +70,7 @@ function loadState() {
 }
 
 function saveState() {
+  if (mysqlOnly) return;
   const state = _state !== null ? _state : loadState();
   try {
     const payload = JSON.stringify(state, null, 2);
@@ -59,6 +84,7 @@ function saveState() {
 }
 
 function schedulePersistState() {
+  if (mysqlOnly) return;
   if (_persistTimer != null) return;
   _persistTimer = setTimeout(() => {
     _persistTimer = null;
@@ -82,12 +108,19 @@ function schedulePersistState() {
 }
 
 function dualWriteMysqlUpsert(greenInstanceDbId, phone, data) {
+  console.log('[STATE_MYSQL] Writing conversation state:', {
+    greenInstanceDbId,
+    phone,
+    lastSentIndex: data?.lastSentIndex,
+    sequenceLength: Array.isArray(data?.sequence) ? data.sequence.length : 0,
+  });
   conversationStateRepository
     .upsertState(greenInstanceDbId, phone, data)
     .then(() => {
       console.log('[STATE] Dual write success');
     })
     .catch((err) => {
+      console.error('[STATE_MYSQL_ERROR]', err?.message || err);
       console.error('[STATE] MySQL upsert failed:', err.message);
     });
 }
@@ -122,6 +155,7 @@ function dualWriteMysqlDelete(greenInstanceDbId, phone) {
 async function getState(greenInstanceDbId, phone) {
   const key = makeStateKey(greenInstanceDbId, phone);
   if (!key) return null;
+  logStateKey(greenInstanceDbId, phone, 'getState');
 
   try {
     const fromDb = await conversationStateRepository.getState(greenInstanceDbId, phone);
@@ -133,6 +167,11 @@ async function getState(greenInstanceDbId, phone) {
     }
   } catch (err) {
     console.error('[STATE] MySQL read error:', err.message);
+  }
+
+  if (mysqlOnly) {
+    console.log('[STATE] MySQL-only mode: no file fallback, returning null for missing row');
+    return null;
   }
 
   loadState();
@@ -149,6 +188,7 @@ async function getState(greenInstanceDbId, phone) {
  * @param {{ lastSentIndex: number, sequence: string[], campaignId?: string }} data
  */
 function setState(greenInstanceDbId, phone, data) {
+  logStateKey(greenInstanceDbId, phone, 'setState');
   const state = loadState();
   const key = makeStateKey(greenInstanceDbId, phone);
   if (!key) return;
