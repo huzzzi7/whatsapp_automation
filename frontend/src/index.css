@@ -1172,6 +1172,14 @@ select.instance-select {
   outline-offset: 2px;
 }
 
+.campaign-details__btn-stop {
+  color: var(--danger, #b91c1c);
+}
+
+html[data-theme='dark'] .campaign-details__btn-stop {
+  color: #f87171;
+}
+
 .campaign-details__queue-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1204,6 +1212,62 @@ select.instance-select {
   font-size: 0.9375rem;
 }
 
+.campaign-section {
+  margin-bottom: 1.5rem;
+}
+
+.campaign-section:last-child {
+  margin-bottom: 0;
+}
+
+.campaign-section__title {
+  margin: 0 0 0.625rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.campaign-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.campaign-name-field {
+  width: 100%;
+  max-width: 500px;
+}
+
+.campaign-name-field__input {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.campaign-name-field__input:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.campaign-name-field__required {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.campaign-name-field__hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--danger, #b91c1c);
+}
+
+html[data-theme='dark'] .campaign-name-field__hint {
+  color: #f87171;
+}
+
 .campaign-details__title-row {
   display: flex;
   flex-direction: column;
@@ -1219,6 +1283,18 @@ select.instance-select {
   font-size: 0.75rem;
   color: var(--text-muted);
   word-break: break-all;
+}
+
+.campaign-details__history-name {
+  font-weight: 600;
+}
+
+.campaign-details__history-id {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  word-break: break-all;
+  margin-top: 0.15rem;
 }
 
 .campaign-details__active-card {
@@ -1530,4 +1606,139 @@ html[data-theme='dark'] .campaign-users-modal__badge--skipped {
   padding-top: 8px;
   border-top: 1px solid var(--border);
   margin-top: 4px;
+}
+
+/* Stop campaign confirmation (CampaignDetailsPage) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 400px;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--surface-elevated);
+  color: var(--text);
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+html[data-theme='dark'] .modal-content {
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.45);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 12px;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.modal-close {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-close:hover {
+  background: var(--code-bg);
+  color: var(--text);
+}
+
+.modal-body {
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.modal-body p {
+  margin: 0;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.btn-secondary {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-secondary:hover {
+  background: var(--border);
+}
+
+.btn-danger {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #e53935;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.btn-danger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.campaign-details__history-actions-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btn-delete {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 6px;
+  background: #d32f2f;
+  color: #fff;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-delete:hover:not(:disabled) {
+  background: #b71c1c;
+}
+
+.btn-delete:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }

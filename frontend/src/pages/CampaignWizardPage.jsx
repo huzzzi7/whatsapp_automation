@@ -37,6 +37,7 @@ export default function CampaignWizardPage() {
     campaignJob: null,
   });
   const [instances, setInstances] = useState([]);
+  const [campaignName, setCampaignName] = useState('');
   const [stepError, setStepError] = useState('');
   const [uploadError, setUploadError] = useState('');
   const [uploadSuccess, setUploadSuccess] = useState('');
@@ -70,11 +71,13 @@ export default function CampaignWizardPage() {
     });
   }, [currentStep]);
 
+  const isNameValid = Boolean(campaignName && campaignName.trim().length > 0);
+
   const canGoToStep = (step) => {
     if (step <= 1) return true;
-    if (step === 2) return true; // Step 1 placeholder validation (allow for now)
-    if (step === 3) return true; // Step 2 placeholder validation (allow for now)
-    if (step === 4) return true; // Step 2 required logically; placeholder allows now
+    if (step === 2) return true;
+    if (step === 3) return true;
+    if (step === 4) return true;
     return false;
   };
 
@@ -116,6 +119,11 @@ export default function CampaignWizardPage() {
         setStepError('Please select instance and upload a valid file');
         return;
       }
+    }
+    const cleanName = campaignName.trim();
+    if (!cleanName) {
+      setStepError('Campaign name is required');
+      return;
     }
     setStepError('');
     goToStep(currentStep + 1);
@@ -181,6 +189,30 @@ export default function CampaignWizardPage() {
       >
         {currentStep === 1 ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="campaign-name-field">
+              <label className="ui-input-label" htmlFor="campaign-wizard-name" style={{ display: 'block', marginBottom: 6 }}>
+                Campaign name <span className="campaign-name-field__required" aria-hidden>(required)</span>
+              </label>
+              <input
+                id="campaign-wizard-name"
+                type="text"
+                className="campaign-name-field__input"
+                placeholder="Enter campaign name"
+                value={campaignName}
+                onChange={(e) => {
+                  setCampaignName(e.target.value);
+                  setStepError('');
+                }}
+                maxLength={255}
+                autoComplete="off"
+                aria-required="true"
+              />
+              {!isNameValid ? (
+                <p className="campaign-name-field__hint" role="status">
+                  Campaign name is required
+                </p>
+              ) : null}
+            </div>
             <ExcelUploadSection
               onUploaded={handleUploaded}
               onError={handleUploadError}
@@ -248,6 +280,7 @@ export default function CampaignWizardPage() {
             uploadResult={wizardData.uploadResult}
             selectedInstanceId={wizardData.selectedInstanceId}
             instances={instances}
+            campaignName={campaignName}
             campaignSettings={wizardData.campaignSettings}
             testSettings={wizardData.testSettings}
             onBack={() => goToStep(3)}
@@ -271,7 +304,7 @@ export default function CampaignWizardPage() {
       ) : null}
 
       {currentStep !== 4 ? (
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
           {currentStep > 1 ? (
             <Button type="button" className="ui-button--inline ui-button--secondary" onClick={prevStep}>
               Back
@@ -283,6 +316,11 @@ export default function CampaignWizardPage() {
               type="button"
               className="ui-button--inline ui-button--secondary"
               onClick={() => {
+                const cleanName = campaignName.trim();
+                if (!cleanName) {
+                  setStepError('Campaign name is required');
+                  return;
+                }
                 setStepError('');
                 setWizardData((prev) => ({
                   ...prev,
@@ -290,13 +328,25 @@ export default function CampaignWizardPage() {
                 }));
                 goToStep(4);
               }}
+              disabled={!isNameValid}
             >
               Skip
             </Button>
           ) : null}
 
           {currentStep < TOTAL_STEPS ? (
-            <Button type="button" className="ui-button--inline" onClick={nextStep}>
+            <Button
+              type="button"
+              className="ui-button--inline"
+              onClick={nextStep}
+              disabled={
+                !isNameValid ||
+                (currentStep === 1 &&
+                  (!wizardData.selectedInstanceId ||
+                    !Array.isArray(wizardData.uploadResult?.users) ||
+                    wizardData.uploadResult.users.length === 0))
+              }
+            >
               Next
             </Button>
           ) : null}

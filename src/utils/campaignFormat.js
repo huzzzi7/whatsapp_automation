@@ -27,9 +27,14 @@ function formatCampaign(c) {
   const percent = total > 0 ? Number(((processed / total) * 100).toFixed(2)) : 0;
   const legacyFailedOrSkipped = failed + skipped;
 
+  const cleanName = c.name && String(c.name).trim() ? String(c.name).trim() : null;
+  const idStr = c.id != null ? String(c.id) : '';
+  const shortId = idStr.length >= 6 ? idStr.slice(0, 6) : idStr;
+
   return {
     id: c.id,
-    name: c.name,
+    name: cleanName,
+    displayName: cleanName || `Campaign ${shortId}`,
     status: c.status,
     greenInstanceId: c.greenInstanceId,
     totalContacts: total,

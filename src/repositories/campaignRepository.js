@@ -262,7 +262,7 @@ async function getQueuedCampaigns() {
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
 
-const LISTABLE_STATUSES = new Set(['queued', 'running', 'paused', 'completed', 'failed', 'cancelled']);
+const LISTABLE_STATUSES = new Set(['queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'stopped']);
 
 /**
  * @param {{ statuses?: string[] }} [opts] - if empty/omitted, all campaigns
@@ -333,7 +333,7 @@ async function listCampaignContactsPage(campaignId, page, limit) {
 
 /**
  * @param {string} campaignId
- * @param {string} status - queued | running | paused | completed | failed | cancelled
+ * @param {string} status - queued | running | paused | completed | failed | cancelled | stopped
  * @param {{ errorMessage?: string }} [opts]
  */
 async function updateCampaignStatus(campaignId, status, opts = {}) {
@@ -344,7 +344,7 @@ async function updateCampaignStatus(campaignId, status, opts = {}) {
       `UPDATE campaigns SET status = ?, error_message = NULL, started_at = COALESCE(started_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       [status, campaignId],
     );
-  } else if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+  } else if (status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stopped') {
     await pool.execute(
       `UPDATE campaigns SET status = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       [status, err, campaignId],
@@ -440,6 +440,15 @@ async function getCampaignById(campaignId) {
   return mapCampaignRow(rows[0]);
 }
 
+/**
+ * @param {string} id - campaigns.id (UUID)
+ * @returns {Promise<number>} affected rows (0 if none)
+ */
+async function deleteCampaignById(id) {
+  const [result] = await pool.execute('DELETE FROM campaigns WHERE id = ?', [id]);
+  return Number(result.affectedRows) || 0;
+}
+
 module.exports = {
   createCampaign,
   getNextQueueOrder,
@@ -468,4 +477,5 @@ module.exports = {
   getCampaignById,
   countCampaignContacts,
   listCampaignContactsPage,
+  deleteCampaignById,
 };

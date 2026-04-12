@@ -91,6 +91,9 @@ async function runCampaignWorker(campaignId) {
       return;
     }
     if (current.status !== 'running') {
+      if (current.status === 'stopped') {
+        console.log(`[CampaignWorker] Campaign ${campaignId} stopped by user`);
+      }
       workerLog(campaignId, greenInstanceDbId, `stopped (status: ${current.status})`);
       return;
     }
@@ -120,6 +123,9 @@ async function runCampaignWorker(campaignId) {
         return true;
       }
       if (c.status !== 'running') {
+        if (c.status === 'stopped') {
+          console.log(`[CampaignWorker] Campaign ${campaignId} stopped by user (mid-batch)`);
+        }
         workerLog(campaignId, greenInstanceDbId, `stopped mid-batch (status: ${c.status})`);
         return true;
       }
@@ -190,6 +196,9 @@ async function runCampaignWorker(campaignId) {
       return;
     }
     if (afterBatch.status !== 'running') {
+      if (afterBatch.status === 'stopped') {
+        console.log(`[CampaignWorker] Campaign ${campaignId} stopped by user (after batch)`);
+      }
       workerLog(campaignId, greenInstanceDbId, `stopped after batch (status: ${afterBatch.status})`);
       return;
     }

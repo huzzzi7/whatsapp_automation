@@ -133,12 +133,14 @@ export async function startCampaign(
   delaySeconds,
   messageDelaySeconds = 0,
   scheduledAt,
+  name,
 ) {
   return apiFetch('/api/campaign/start', {
     method: 'POST',
     body: JSON.stringify({
       users,
       greenInstanceId,
+      name,
       batchSize,
       delaySeconds,
       messageDelaySeconds,
@@ -184,6 +186,14 @@ export async function resumeCampaign(id) {
 
 export async function startQueuedCampaign(id) {
   return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/start`, { method: 'POST', body: '{}' });
+}
+
+export async function stopCampaign(id) {
+  return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/stop`, { method: 'POST', body: '{}' });
+}
+
+export async function deleteCampaign(id) {
+  return apiFetch(`/api/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 /**

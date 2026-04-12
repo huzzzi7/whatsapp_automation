@@ -8,6 +8,8 @@ import {
   pauseCampaign,
   resumeCampaign,
   startQueuedCampaign,
+  stopCampaign,
+  deleteCampaign,
 } from '../api';
 
 const POLL_MS = 2500;
@@ -75,12 +77,15 @@ function StatusBadge({ status }) {
     completed: 'campaign-details__badge campaign-details__badge--completed',
     failed: 'campaign-details__badge campaign-details__badge--failed',
     cancelled: 'campaign-details__badge campaign-details__badge--muted',
+    stopped: 'campaign-details__badge campaign-details__badge--muted',
   };
   return <span className={map[s] || 'campaign-details__badge campaign-details__badge--muted'}>{status || '—'}</span>;
 }
 
 function CampaignTitle({ c }) {
-  const label = c.name && String(c.name).trim() ? c.name : c.id;
+  const label =
+    c.displayName ||
+    (c.name && String(c.name).trim() ? c.name : `Campaign ${String(c.id || '').slice(0, 6)}`);
   return (
     <div className="campaign-details__title-row">
       <strong className="campaign-details__title">{label}</strong>
@@ -136,6 +141,8 @@ export default function CampaignDetailsPage() {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
+  const [confirmStopId, setConfirmStopId] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
 
   const handleViewUsers = useCallback((id) => {
@@ -187,6 +194,18 @@ export default function CampaignDetailsPage() {
     return () => clearInterval(id);
   }, [shouldPoll, loadActive]);
 
+  useEffect(() => {
+    if (!confirmStopId && !confirmDeleteId) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setConfirmStopId(null);
+        setConfirmDeleteId(null);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [confirmStopId, confirmDeleteId]);
+
   const runningList = active.runningAll || [];
   const pausedList = active.paused || [];
   const queuedList = active.queued || [];
@@ -235,11 +254,37 @@ export default function CampaignDetailsPage() {
     }
   };
 
-  const renderRunningCards = () => {
-    if (!runningList.length) {
-      return <p className="campaign-details__empty">No running campaigns</p>;
+  const handleStop = async (id) => {
+    setActionBusy(true);
+    try {
+      await stopCampaign(id);
+      await loadActive();
+      await loadHistory();
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Stop failed.');
+    } finally {
+      setActionBusy(false);
     }
-    return runningList.map((c) => (
+  };
+
+  const handleDelete = async (id) => {
+    setActionBusy(true);
+    try {
+      await deleteCampaign(id);
+      if (selectedCampaignId === id) setSelectedCampaignId(null);
+      await loadActive();
+      await loadHistory();
+      setError('');
+    } catch (e) {
+      setError(e?.message || 'Delete failed.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const renderRunningCards = () =>
+    runningList.map((c) => (
       <div key={c.id} className="campaign-details__active-card">
         <div className="campaign-details__card-head">
           <CampaignTitle c={c} />
@@ -263,7 +308,7 @@ export default function CampaignDetailsPage() {
           Remaining <strong>{c.remaining}</strong>
         </p>
         <ProgressBar percent={campaignProgressPercent(c)} />
-        <div style={{ marginTop: '1rem' }}>
+        <div style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <Button
             type="button"
             className="ui-button--inline"
@@ -272,16 +317,20 @@ export default function CampaignDetailsPage() {
           >
             Pause
           </Button>
+          <Button
+            type="button"
+            className="ui-button--inline ui-button--secondary campaign-details__btn-stop"
+            onClick={() => setConfirmStopId(c.id)}
+            disabled={actionBusy}
+          >
+            Stop
+          </Button>
         </div>
       </div>
     ));
-  };
 
-  const renderPausedCards = () => {
-    if (!pausedList.length) {
-      return <p className="campaign-details__empty muted">No paused campaigns</p>;
-    }
-    return pausedList.map((c) => {
+  const renderPausedCards = () =>
+    pausedList.map((c) => {
       const blocked = instanceHasRunning(runningList, c.greenInstanceId);
       return (
         <div key={c.id} className="campaign-details__active-card campaign-details__active-card--secondary">
@@ -298,7 +347,7 @@ export default function CampaignDetailsPage() {
             {c.totalContacts} · Remaining {c.remaining}
           </p>
           <ProgressBar percent={campaignProgressPercent(c)} />
-          <div style={{ marginTop: '0.75rem' }}>
+          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
             <Button
               type="button"
               className="ui-button--inline"
@@ -306,6 +355,14 @@ export default function CampaignDetailsPage() {
               disabled={actionBusy || blocked}
             >
               Resume
+            </Button>
+            <Button
+              type="button"
+              className="ui-button--inline ui-button--secondary campaign-details__btn-stop"
+              onClick={() => setConfirmStopId(c.id)}
+              disabled={actionBusy}
+            >
+              Stop
             </Button>
             {blocked ? (
               <span className="campaign-details__hint" style={{ marginLeft: '0.5rem' }}>
@@ -316,7 +373,8 @@ export default function CampaignDetailsPage() {
         </div>
       );
     });
-  };
+
+  const showActiveCard = loading || hasActiveData;
 
   return (
     <div className="campaign-details-page">
@@ -328,70 +386,75 @@ export default function CampaignDetailsPage() {
       {error ? <div className="alert-error" style={{ marginBottom: '1rem' }}>{error}</div> : null}
 
       <div className="campaign-details__grid">
-        {hasActiveData ? (
+        {showActiveCard ? (
           <Card className="campaign-details__section">
-            <h2 className="campaign-details__section-title">Active</h2>
-
-            <h3 className="campaign-details__subsection-title">Running</h3>
-            {loading ? <p className="muted">Loading…</p> : renderRunningCards()}
-
-            <h3 className="campaign-details__subsection-title" style={{ marginTop: '1.5rem' }}>
-              Paused
-            </h3>
-            {loading ? <p className="muted">Loading…</p> : renderPausedCards()}
-
-            <h3 className="campaign-details__subsection-title" style={{ marginTop: '1.5rem' }}>
-              Queue
-            </h3>
+            <h2 className="campaign-details__section-title">Live campaigns</h2>
             {loading ? (
               <p className="muted">Loading…</p>
-            ) : queuedList.length === 0 ? (
-              <p className="campaign-details__empty">Queue is empty</p>
             ) : (
-              <ul className="campaign-details__queue-list">
-                {queuedList.map((c) => {
-                  const startBlocked = instanceHasRunning(runningList, c.greenInstanceId);
-                  if (import.meta.env.DEV) {
-                    console.log('Start check:', {
-                      campaignId: c.id,
-                      instance: c.greenInstanceId,
-                      startBlocked,
-                      runningList,
-                    });
-                  }
-                  return (
-                    <li key={c.id} className="campaign-details__queue-item">
-                      <div>
-                        <CampaignTitle c={c} />
-                        <div className="campaign-details__queue-meta">
-                          <StatusBadge status="queued" /> Order #{c.queueOrder}
-                        </div>
-                        {c.status === 'queued' && c.scheduledAt ? (
-                          <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
-                            Scheduled for: {formatScheduledUk(c.scheduledAt)}
-                          </p>
-                        ) : null}
-                        {startBlocked ? (
-                          <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
-                            Start blocked: a campaign is already running on this instance.
-                          </p>
-                        ) : null}
-                      </div>
-                      <div className="campaign-details__queue-actions">
-                        <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
-                        <Button
-                          type="button"
-                          className="ui-button--inline ui-button--secondary"
-                          onClick={() => handleStartQueued(c.id)}
-                          disabled={actionBusy || startBlocked}
-                        >
-                          Start
-                        </Button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
+              <>
+                {runningList.length > 0 ? (
+                  <div className="campaign-section">
+                    <h3 className="campaign-section__title">Active campaigns</h3>
+                    <div className="campaign-section__body">{renderRunningCards()}</div>
+                  </div>
+                ) : null}
+                {pausedList.length > 0 ? (
+                  <div className="campaign-section">
+                    <h3 className="campaign-section__title">Paused campaigns</h3>
+                    <div className="campaign-section__body">{renderPausedCards()}</div>
+                  </div>
+                ) : null}
+                {queuedList.length > 0 ? (
+                  <div className="campaign-section">
+                    <h3 className="campaign-section__title">Queued campaigns</h3>
+                    <ul className="campaign-details__queue-list campaign-section__body">
+                      {queuedList.map((c) => {
+                        const startBlocked = instanceHasRunning(runningList, c.greenInstanceId);
+                        return (
+                          <li key={c.id} className="campaign-details__queue-item">
+                            <div>
+                              <CampaignTitle c={c} />
+                              <div className="campaign-details__queue-meta">
+                                <StatusBadge status="queued" /> Order #{c.queueOrder}
+                              </div>
+                              {c.status === 'queued' && c.scheduledAt ? (
+                                <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
+                                  Scheduled for: {formatScheduledUk(c.scheduledAt)}
+                                </p>
+                              ) : null}
+                              {startBlocked ? (
+                                <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
+                                  Start blocked: a campaign is already running on this instance.
+                                </p>
+                              ) : null}
+                            </div>
+                            <div className="campaign-details__queue-actions">
+                              <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+                              <Button
+                                type="button"
+                                className="ui-button--inline ui-button--secondary campaign-details__btn-stop"
+                                onClick={() => setConfirmStopId(c.id)}
+                                disabled={actionBusy}
+                              >
+                                Stop
+                              </Button>
+                              <Button
+                                type="button"
+                                className="ui-button--inline ui-button--secondary"
+                                onClick={() => handleStartQueued(c.id)}
+                                disabled={actionBusy || startBlocked}
+                              >
+                                Start
+                              </Button>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ) : null}
+              </>
             )}
           </Card>
         ) : null}
@@ -407,7 +470,7 @@ export default function CampaignDetailsPage() {
               <table className="campaign-details__table">
                 <thead>
                   <tr>
-                    <th>Campaign ID</th>
+                    <th>Campaign name</th>
                     <th>Status</th>
                     <th>Total</th>
                     <th>Sent</th>
@@ -422,7 +485,8 @@ export default function CampaignDetailsPage() {
                   {history.map((c) => (
                     <tr key={c.id}>
                       <td>
-                        <code className="campaign-details__table-id">{c.id}</code>
+                        <div className="campaign-details__history-name">{c.displayName || c.name || `Campaign ${String(c.id || '').slice(0, 6)}`}</div>
+                        <small className="campaign-details__history-id">{c.id}</small>
                       </td>
                       <td>
                         <StatusBadge status={c.status} />
@@ -439,7 +503,22 @@ export default function CampaignDetailsPage() {
                       <td>{formatDt(c.createdAt)}</td>
                       <td>{formatDt(c.completedAt)}</td>
                       <td className="campaign-details__history-actions">
-                        <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+                        <div className="campaign-details__history-actions-inner">
+                          <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+                          <button
+                            type="button"
+                            className="btn-delete"
+                            disabled={c.status === 'running' || actionBusy}
+                            title={
+                              c.status === 'running'
+                                ? 'Stop the campaign before deleting.'
+                                : 'Delete campaign permanently'
+                            }
+                            onClick={() => setConfirmDeleteId(c.id)}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -456,6 +535,96 @@ export default function CampaignDetailsPage() {
           campaignId={selectedCampaignId}
           onClose={() => setSelectedCampaignId(null)}
         />
+      ) : null}
+
+      {confirmStopId ? (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => setConfirmStopId(null)}
+        >
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="campaign-stop-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3 id="campaign-stop-modal-title" className="modal-title">
+                Stop campaign
+              </h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={() => setConfirmStopId(null)}>
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>Are you sure you want to stop this campaign?</p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={() => setConfirmStopId(null)}>
+                No
+              </button>
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={actionBusy}
+                onClick={() => {
+                  const id = confirmStopId;
+                  setConfirmStopId(null);
+                  void handleStop(id);
+                }}
+              >
+                Yes, stop
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {confirmDeleteId ? (
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => setConfirmDeleteId(null)}
+        >
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="campaign-delete-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3 id="campaign-delete-modal-title" className="modal-title">
+                Delete campaign
+              </h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={() => setConfirmDeleteId(null)}>
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>Are you sure you want to delete this campaign? This action cannot be undone.</p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={() => setConfirmDeleteId(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={actionBusy}
+                onClick={() => {
+                  const id = confirmDeleteId;
+                  setConfirmDeleteId(null);
+                  void handleDelete(id);
+                }}
+              >
+                Yes, delete
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

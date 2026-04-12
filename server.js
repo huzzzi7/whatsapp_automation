@@ -43,6 +43,7 @@ const {
   countCampaignContacts,
   listCampaignContactsPage,
   updateCampaignStatus,
+  deleteCampaignById,
 } = require('./src/repositories/campaignRepository');
 const { tryRunNext } = require('./src/services/CampaignCoordinator');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
@@ -740,7 +741,13 @@ app.get('/api/campaign/stats', async (req, res) => {
 });
 
 // POST /api/campaign/start – reply-driven: send only message 1 to each user
+//
+// Production DB: deploying this app does not run migrations. If `campaigns.name` is missing on
+// the live database, add it once via Hostinger / phpMyAdmin SQL (safe, no data loss):
+//   ALTER TABLE campaigns ADD COLUMN name VARCHAR(255) NULL;
+//
 app.post('/api/campaign/start', async (req, res) => {
+  const body = req.body || {};
   const {
     users: bodyUsers,
     greenInstanceId,
@@ -748,7 +755,9 @@ app.post('/api/campaign/start', async (req, res) => {
     delaySeconds,
     messageDelaySeconds: rawMessageDelaySeconds = 0,
     scheduledAt: rawScheduledAt,
-  } = req.body || {};
+  } = body;
+  const campaignName =
+    body.name && String(body.name).trim() ? String(body.name).trim() : null;
   let messageDelaySeconds = Number(rawMessageDelaySeconds) || 0;
   if (messageDelaySeconds < 0) messageDelaySeconds = 0;
   if (!bodyUsers || !Array.isArray(bodyUsers) || bodyUsers.length === 0) {
@@ -782,7 +791,7 @@ app.post('/api/campaign/start', async (req, res) => {
     await createCampaign({
       id: campaignId,
       greenInstanceId: gid,
-      name: null,
+      name: campaignName,
       batchSize: safeBatchSize,
       delaySeconds: safeDelaySeconds,
       messageDelaySeconds,
@@ -831,6 +840,28 @@ app.post('/api/campaigns/:id/pause', async (req, res) => {
   } catch (err) {
     console.error('[Campaign pause]', err);
     res.status(500).json({ ok: false, error: err.message || 'Pause failed.' });
+  }
+});
+
+// POST /api/campaigns/:id/stop – queued | running | paused → stopped (terminal)
+app.post('/api/campaigns/:id/stop', async (req, res) => {
+  try {
+    const c = await getCampaignById(req.params.id);
+    if (!c) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found.' });
+    }
+    if (!['queued', 'running', 'paused'].includes(c.status)) {
+      return res.status(400).json({ ok: false, error: 'Campaign cannot be stopped.' });
+    }
+    await updateCampaignStatus(c.id, 'stopped', {
+      errorMessage: 'Stopped by user',
+    });
+    console.log('[Campaign] Campaign stopped:', c.id);
+    tryRunNext().catch((err) => console.error('[Campaign stop] tryRunNext', err));
+    res.json({ ok: true, status: 'stopped' });
+  } catch (err) {
+    console.error('[Campaign stop]', err);
+    res.status(500).json({ ok: false, error: err.message || 'Failed to stop campaign.' });
   }
 });
 
@@ -919,6 +950,37 @@ app.get('/api/campaigns', async (req, res) => {
   } catch (err) {
     console.error('[Campaigns list]', err);
     res.status(500).json({ error: err.message || 'Failed to list campaigns.' });
+  }
+});
+
+// DELETE /api/campaigns/:id – remove campaign (CASCADE contacts); not allowed while running
+app.delete('/api/campaigns/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const campaign = await getCampaignById(id);
+    if (!campaign) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found.' });
+    }
+    if (campaign.status === 'running') {
+      return res.status(409).json({
+        ok: false,
+        error: 'Cannot delete a running campaign. Please stop it first.',
+      });
+    }
+    const stableKey = `campaign-${id}`;
+    await pool.execute(
+      'UPDATE conversation_state SET campaign_id = NULL WHERE campaign_id IN (?, ?)',
+      [id, stableKey],
+    );
+    const deleted = await deleteCampaignById(id);
+    if (!deleted) {
+      return res.status(404).json({ ok: false, error: 'Campaign already deleted.' });
+    }
+    tryRunNext().catch((err) => console.error('[Campaign delete] tryRunNext', err));
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[Campaign delete]', err);
+    res.status(500).json({ ok: false, error: err.message || 'Failed to delete campaign.' });
   }
 });
 

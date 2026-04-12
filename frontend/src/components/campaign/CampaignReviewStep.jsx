@@ -15,6 +15,7 @@ const POLL_MS = 1500;
  * @param {object | null} props.uploadResult
  * @param {string} props.selectedInstanceId
  * @param {{ id: string; name?: string }[]} props.instances
+ * @param {string} [props.campaignName]
  * @param {{ batchSize: number; delaySeconds: number; messageDelaySeconds?: number; templates: string[] }} props.campaignSettings
  * @param {{ phone?: string; university?: string; link?: string; group?: string; greenInstanceId?: string }} [props.testSettings]
  * @param {() => void} props.onBack
@@ -24,6 +25,7 @@ export default function CampaignReviewStep({
   uploadResult,
   selectedInstanceId,
   instances,
+  campaignName = '',
   campaignSettings,
   testSettings,
   onBack,
@@ -47,6 +49,11 @@ export default function CampaignReviewStep({
   const mergedUpload = useMemo(
     () => applyTemplatesToUploadResult(uploadResult, campaignSettings?.templates || []),
     [uploadResult, campaignSettings?.templates],
+  );
+
+  const isNameValid = useMemo(
+    () => Boolean(campaignName != null && String(campaignName).trim().length > 0),
+    [campaignName],
   );
 
   const instanceName = useMemo(() => {
@@ -79,8 +86,15 @@ export default function CampaignReviewStep({
         return false;
       }
 
+      const cleanName = campaignName != null ? String(campaignName).trim() : '';
+      if (!cleanName) {
+        setStartError('Campaign name is required');
+        return false;
+      }
+
       setStarting(true);
       try {
+        const trimmedName = cleanName;
         const data = await startCampaign(
           users,
           selectedInstanceId,
@@ -88,6 +102,7 @@ export default function CampaignReviewStep({
           campaignSettings.delaySeconds,
           Math.max(0, Number(campaignSettings.messageDelaySeconds) || 0),
           scheduledAtIso,
+          trimmedName,
         );
         if (!data?.ok || !data.jobId) {
           setStartError(data?.error || 'Campaign start failed.');
@@ -107,7 +122,7 @@ export default function CampaignReviewStep({
         setStarting(false);
       }
     },
-    [mergedUpload, selectedInstanceId, campaignSettings, onCampaignStart],
+    [mergedUpload, selectedInstanceId, campaignSettings, campaignName, onCampaignStart],
   );
 
   const handleStart = useCallback(() => {
@@ -312,7 +327,7 @@ export default function CampaignReviewStep({
           type="button"
           className="ui-button--inline ui-button--secondary"
           onClick={openScheduleModal}
-          disabled={starting || Boolean(jobId && jobStatus !== 'failed')}
+          disabled={!isNameValid || starting || Boolean(jobId && jobStatus !== 'failed')}
         >
           Schedule
         </Button>
@@ -320,7 +335,7 @@ export default function CampaignReviewStep({
           type="button"
           className="ui-button--inline"
           onClick={handleStart}
-          disabled={starting || Boolean(jobId && jobStatus !== 'failed')}
+          disabled={!isNameValid || starting || Boolean(jobId && jobStatus !== 'failed')}
           loading={starting}
         >
           {jobId ? (jobStatus === 'failed' ? 'Retry campaign' : 'Campaign started') : 'Start campaign'}
@@ -364,7 +379,13 @@ export default function CampaignReviewStep({
             >
               Cancel
             </Button>
-            <Button type="button" className="ui-button--inline" onClick={() => void handleScheduleConfirm()} loading={starting}>
+            <Button
+              type="button"
+              className="ui-button--inline"
+              onClick={() => void handleScheduleConfirm()}
+              loading={starting}
+              disabled={!isNameValid || starting}
+            >
               Confirm schedule
             </Button>
           </div>
