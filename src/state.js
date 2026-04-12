@@ -185,7 +185,7 @@ async function tryAdvanceLastSent(greenInstanceDbId, phone, expectedIndex, newIn
   const key = makeStateKey(greenInstanceDbId, phone);
   if (!key) return { success: false };
   try {
-    const { success } = await conversationStateRepository.updateLastSent(
+    let { success } = await conversationStateRepository.updateLastSent(
       greenInstanceDbId,
       phone,
       newIndex,
@@ -204,10 +204,49 @@ async function tryAdvanceLastSent(greenInstanceDbId, phone, expectedIndex, newIn
       }
       _stateMutationRev += 1;
       schedulePersistState();
+      console.log('[LOCK_RESULT] success');
+      return { success: true };
     }
-    return { success };
+
+    console.log('[LOCK_RESULT] fail first_pass; attempting recovery upsert+retry');
+    loadState();
+    const row = _state[key];
+    if (row != null) {
+      await conversationStateRepository.upsertState(greenInstanceDbId, phone, {
+        lastSentIndex: expectedIndex,
+        sequence: Array.isArray(row.sequence) ? row.sequence : [],
+        campaignId: row.campaignId,
+        status: row.status,
+      });
+      const retry = await conversationStateRepository.updateLastSent(
+        greenInstanceDbId,
+        phone,
+        newIndex,
+        expectedIndex,
+      );
+      if (retry.success) {
+        loadState();
+        if (_state[key] == null) {
+          _state[key] = {
+            lastSentIndex: newIndex,
+            sequence: row.sequence || [],
+            campaignId: row.campaignId,
+            status: row.status,
+          };
+        } else {
+          _state[key].lastSentIndex = newIndex;
+        }
+        _stateMutationRev += 1;
+        schedulePersistState();
+        console.log('[LOCK_RESULT] success_via_recovery');
+        return { success: true };
+      }
+    }
+    console.log('[LOCK_RESULT] fail_after_recovery');
+    return { success: false };
   } catch (err) {
     console.error('[STATE] tryAdvanceLastSent MySQL error:', err.message);
+    console.log('[LOCK_RESULT] fail error');
     return { success: false };
   }
 }

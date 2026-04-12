@@ -99,6 +99,7 @@ const DDL = {
   last_sent_index INT NOT NULL,
   campaign_id VARCHAR(255) NULL,
   sequence_json JSON NOT NULL,
+  status VARCHAR(32) NULL,
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY uniq_state (green_instance_db_id, phone_normalized),
   KEY idx_conversation_state_updated (green_instance_db_id, updated_at)
@@ -155,6 +156,7 @@ async function main() {
   console.log('All required tables present:', REQUIRED.join(', '));
 
   await ensureIncomingMessagesDedupeKey(conn);
+  await ensureConversationStateStatusColumn(conn);
 
   await conn.end();
 }
@@ -187,6 +189,23 @@ async function ensureIncomingMessagesDedupeKey(conn) {
   if (Number(idxRows[0]?.cnt) === 0) {
     console.log('MIGRATE: incoming_messages_log — adding UNIQUE KEY uniq_dedupe');
     await conn.query('ALTER TABLE incoming_messages_log ADD UNIQUE KEY uniq_dedupe (dedupe_key)');
+  }
+}
+
+/** Add conversation_state.status for intent / stopped tracking. */
+async function ensureConversationStateStatusColumn(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  const [colRows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'conversation_state' AND COLUMN_NAME = 'status'`,
+    [schema],
+  );
+  if (Number(colRows[0]?.cnt) === 0) {
+    console.log('MIGRATE: conversation_state — adding status column');
+    await conn.query('ALTER TABLE conversation_state ADD COLUMN status VARCHAR(32) NULL');
   }
 }
 

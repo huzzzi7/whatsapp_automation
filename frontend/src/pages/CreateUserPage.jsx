@@ -4,12 +4,56 @@ import Card from '../components/ui/Card';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 
+function IconPencil() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function IconTrash() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <polyline points="3 6 5 6 21 6" />
+      <path d="M19 6l-1 14H6L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+      <path d="M9 6V4h6v2" />
+    </svg>
+  );
+}
+
 export default function CreateUserPage() {
-  const modalRef = useRef(null);
+  const formModalRef = useRef(null);
   const [users, setUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState(null);
+  const [confirmDeleteUser, setConfirmDeleteUser] = useState(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('USER');
@@ -18,6 +62,7 @@ export default function CreateUserPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const loadUsers = useCallback(async () => {
     setLoadingUsers(true);
@@ -42,21 +87,29 @@ export default function CreateUserPage() {
   }, [users]);
 
   useEffect(() => {
-    if (!isModalOpen) return undefined;
-    const handleClickOutside = (e) => {
-      if (modalRef.current && !modalRef.current.contains(e.target)) {
+    if (!isModalOpen && !confirmDeleteUser) return undefined;
+    const handleEsc = (e) => {
+      if (e.key !== 'Escape') return;
+      if (confirmDeleteUser) setConfirmDeleteUser(null);
+      else if (isModalOpen) {
         setIsModalOpen(false);
+        setEditingUser(null);
       }
     };
-    const handleEsc = (e) => {
-      if (e.key === 'Escape') setIsModalOpen(false);
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [isModalOpen, confirmDeleteUser]);
+
+  useEffect(() => {
+    if (!isModalOpen) return undefined;
+    const handleClickOutside = (e) => {
+      if (formModalRef.current && !formModalRef.current.contains(e.target)) {
+        setIsModalOpen(false);
+        setEditingUser(null);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleEsc);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleEsc);
-    };
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isModalOpen]);
 
   useEffect(() => {
@@ -91,17 +144,21 @@ export default function CreateUserPage() {
     setEditingUser(null);
   };
 
-  const handleDelete = async (user) => {
-    const confirmed = window.confirm('Are you sure you want to delete this user?');
-    if (!confirmed) return;
+  const executeDeleteUser = async () => {
+    const user = confirmDeleteUser;
+    if (!user) return;
+    setConfirmDeleteUser(null);
     setError('');
     setSuccess('');
+    setDeleteBusy(true);
     try {
       await deleteAppUser(user.id);
       setSuccess('User deleted successfully.');
       await loadUsers();
     } catch (err) {
       setError(err.message || 'Failed to delete user');
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -154,7 +211,7 @@ export default function CreateUserPage() {
   };
 
   return (
-    <div>
+    <div className="create-user-page campaign-details-page">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
         <h1 style={{ margin: 0 }}>Users</h1>
         <Button type="button" className="ui-button--inline" onClick={openCreateModal}>
@@ -162,146 +219,204 @@ export default function CreateUserPage() {
         </Button>
       </div>
 
-      <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>Manage dashboard users and permissions.</p>
+      <p style={{ marginBottom: '1.5rem', color: 'var(--text-muted)' }}>Manage dashboard users and permissions.</p>
 
-      {error && <div className="alert-error">{error}</div>}
-      {success && <div className="alert-success">{success}</div>}
+      {error ? (
+        <div className="alert-error" style={{ marginBottom: '1rem' }}>
+          {error}
+        </div>
+      ) : null}
+      {success ? (
+        <div className="alert-success" style={{ marginBottom: '1rem' }}>
+          {success}
+        </div>
+      ) : null}
 
-      <Card>
-        {loadingUsers ? (
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>Loading users…</p>
-        ) : users.length === 0 ? (
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>No users found.</p>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Name</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Email</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Role</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Created At</th>
-                  <th style={{ textAlign: 'left', padding: '0.5rem' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map((u) => (
-                  <tr key={u.id}>
-                    <td style={{ padding: '0.5rem', borderTop: '1px solid var(--border)' }}>{u.name || '-'}</td>
-                    <td style={{ padding: '0.5rem', borderTop: '1px solid var(--border)' }}>{u.email}</td>
-                    <td style={{ padding: '0.5rem', borderTop: '1px solid var(--border)' }}>{u.role}</td>
-                    <td style={{ padding: '0.5rem', borderTop: '1px solid var(--border)' }}>
-                      {u.createdAt ? new Date(u.createdAt).toLocaleString() : '-'}
-                    </td>
-                    <td style={{ padding: '0.5rem', borderTop: '1px solid var(--border)' }}>
-                      <div style={{ display: 'flex', gap: '0.4rem' }}>
-                        <button
-                          type="button"
-                          onClick={() => openEditModal(u)}
-                          title="Edit user"
-                          aria-label="Edit user"
-                          style={{ border: '1px solid var(--border)', background: 'var(--surface)', borderRadius: 6, cursor: 'pointer' }}
-                        >
-                          ✎
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDelete(u)}
-                          title="Delete user"
-                          aria-label="Delete user"
-                          style={{ border: '1px solid #fecaca', background: '#fee2e2', borderRadius: 6, cursor: 'pointer' }}
-                        >
-                          🗑
-                        </button>
-                      </div>
-                    </td>
+      <div className="campaign-details__grid">
+        <Card className="campaign-details__section">
+          <h2 className="campaign-details__section-title">Users</h2>
+          {loadingUsers ? (
+            <p className="muted">Loading users…</p>
+          ) : users.length === 0 ? (
+            <p className="campaign-details__empty">No users found.</p>
+          ) : (
+            <div className="campaign-details__table-wrap">
+              <table className="campaign-details__table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Created</th>
+                    <th>Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+                </thead>
+                <tbody>
+                  {users.map((u) => (
+                    <tr key={u.id}>
+                      <td>{u.name || '—'}</td>
+                      <td>{u.email}</td>
+                      <td>{u.role}</td>
+                      <td>{u.createdAt ? new Date(u.createdAt).toLocaleString() : '—'}</td>
+                      <td className="campaign-details__history-actions">
+                        <div className="campaign-details__history-actions-inner">
+                          <button
+                            type="button"
+                            className="campaign-details__icon-btn"
+                            title="Edit user"
+                            aria-label="Edit user"
+                            onClick={() => openEditModal(u)}
+                          >
+                            <IconPencil />
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-delete btn-icon"
+                            title="Delete user"
+                            aria-label="Delete user"
+                            onClick={() => setConfirmDeleteUser(u)}
+                          >
+                            <IconTrash />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      </div>
 
       {isModalOpen ? (
-        <div
-          role="presentation"
-          onClick={closeModal}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.45)',
-            display: 'grid',
-            placeItems: 'center',
-            zIndex: 1000,
-            padding: '1rem',
-          }}
-        >
+        <div className="modal-overlay" role="presentation" onClick={closeModal}>
           <div
-            ref={modalRef}
+            ref={formModalRef}
+            className="modal-content"
             role="dialog"
             aria-modal="true"
-            aria-label={editingUser ? 'Edit User' : 'Add New User'}
+            aria-labelledby="create-user-form-modal-title"
             onClick={(e) => e.stopPropagation()}
-            style={{ width: '100%', maxWidth: 460, background: 'var(--surface)', borderRadius: 10, padding: '1rem' }}
           >
-            <h2 style={{ marginTop: 0 }}>{editingUser ? 'Edit User' : 'Add New User'}</h2>
-            <form onSubmit={handleSubmit} style={{ maxWidth: 420 }}>
-              <Input
-                label="Name"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-                autoComplete="name"
-              />
-              <Input
-                label="Email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoComplete="off"
-              />
-              <div className="ui-input-wrap">
-                <label className="ui-input-label" htmlFor="create-user-role">
-                  Role
-                </label>
-                <select
-                  id="create-user-role"
-                  className="ui-input-field"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                >
-                  <option value="USER">USER</option>
-                  <option value="ADMIN">ADMIN</option>
-                </select>
-              </div>
-              <Input
-                label={editingUser ? 'Password (optional)' : 'Password'}
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required={!editingUser}
-                autoComplete="new-password"
-              />
-              <Input
-                label={editingUser ? 'Confirm password (optional)' : 'Confirm password'}
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required={!editingUser}
-                autoComplete="new-password"
-              />
-              <div style={{ display: 'flex', gap: '0.5rem' }}>
-                <Button type="button" className="ui-button--inline ui-button--secondary" onClick={closeModal}>
-                  Cancel
-                </Button>
-                <Button type="submit" loading={loading} disabled={loading}>
-                  {editingUser ? 'Update User' : 'Create User'}
-                </Button>
-              </div>
-            </form>
+            <div className="modal-header">
+              <h3 id="create-user-form-modal-title" className="modal-title">
+                {editingUser ? 'Edit user' : 'Add new user'}
+              </h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={closeModal}>
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <form id="create-user-form" onSubmit={handleSubmit}>
+                <Input
+                  label="Name"
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  autoComplete="name"
+                />
+                <Input
+                  label="Email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="off"
+                />
+                <div className="ui-input-wrap">
+                  <label className="ui-input-label" htmlFor="create-user-role">
+                    Role
+                  </label>
+                  <select
+                    id="create-user-role"
+                    className="ui-input-field"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value)}
+                  >
+                    <option value="USER">USER</option>
+                    <option value="ADMIN">ADMIN</option>
+                  </select>
+                </div>
+                <Input
+                  label={editingUser ? 'Password (optional)' : 'Password'}
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required={!editingUser}
+                  autoComplete="new-password"
+                />
+                <Input
+                  label={editingUser ? 'Confirm password (optional)' : 'Confirm password'}
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required={!editingUser}
+                  autoComplete="new-password"
+                />
+              </form>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={closeModal}>
+                Cancel
+              </button>
+              <Button
+                type="submit"
+                form="create-user-form"
+                className="ui-button--inline"
+                loading={loading}
+                disabled={loading}
+              >
+                {editingUser ? 'Update user' : 'Create user'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {confirmDeleteUser ? (
+        <div className="modal-overlay" role="presentation" onClick={() => setConfirmDeleteUser(null)}>
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-user-delete-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3 id="create-user-delete-modal-title" className="modal-title">
+                Delete user
+              </h3>
+              <button
+                type="button"
+                className="modal-close"
+                aria-label="Close"
+                onClick={() => setConfirmDeleteUser(null)}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <p>
+                Are you sure you want to delete{' '}
+                <strong>{confirmDeleteUser.name || confirmDeleteUser.email || 'this user'}</strong>? This cannot be
+                undone.
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={() => setConfirmDeleteUser(null)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-danger"
+                disabled={deleteBusy}
+                onClick={() => void executeDeleteUser()}
+              >
+                Yes, delete
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

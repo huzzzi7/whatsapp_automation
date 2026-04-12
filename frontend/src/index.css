@@ -1742,3 +1742,11 @@ html[data-theme='dark'] .modal-content {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+.btn-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  font-size: 16px;
+}

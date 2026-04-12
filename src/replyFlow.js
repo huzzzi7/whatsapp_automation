@@ -163,12 +163,12 @@ async function sendFirstMessageOnly(users, config, opts) {
 
 /**
  * @param {string} phone
- * @param {{ greenApi: object, greenInstanceDbId: string }} opts
+ * @param {{ greenApi: object, greenInstanceDbId: string, incomingText?: string, lastIntentType?: string }} opts
  * @param {StateStore} store
  * @param {string} logPrefix - e.g. "ReplyFlow-Prod"
  */
 async function runIncomingReply(phone, opts, store, logPrefix) {
-  const { greenApi, greenInstanceDbId } = opts || {};
+  const { greenApi, greenInstanceDbId, incomingText, lastIntentType } = opts || {};
   if (!greenApi || !greenInstanceDbId) {
     console.error(`[${logPrefix}] Missing greenApi or greenInstanceDbId`);
     return;
@@ -194,8 +194,32 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
 
   if (userState == null) {
     console.log(`[${logPrefix}] Unknown phone ignored:`, phone);
+    console.log('[REPLY_FLOW] skipped reason=unknown_phone');
     return;
   }
+
+  const statusNorm = String(userState.status || '').toLowerCase();
+  console.log('[STATE_STATUS]', statusNorm || 'active');
+
+  if (statusNorm === 'stopped') {
+    const ltRaw = lastIntentType != null && String(lastIntentType).trim() !== '' ? String(lastIntentType).trim() : '';
+    const intentUpper = ltRaw ? ltRaw.toUpperCase() : '';
+    const inboundLower = String(incomingText || '').toLowerCase();
+    const restartPhrases = /\b(restart|continue|start)\b/i.test(inboundLower);
+    const allowResume =
+      restartPhrases || (intentUpper !== '' && intentUpper !== 'NOT_INTERESTED');
+
+    if (allowResume) {
+      const cleared = { ...userState, status: 'active' };
+      store.setState(greenInstanceDbId, normalized, cleared);
+      userState = cleared;
+      console.log('[STATE_STATUS] resumed active (override after non-opt-out or restart phrase)');
+    } else {
+      console.log('[REPLY_FLOW] skipped reason=user_stopped_opt_out');
+      return;
+    }
+  }
+
   console.log(`[${logPrefix}] State found, lastSentIndex:`, userState.lastSentIndex);
   const sequence = userState.sequence;
   if (!sequence || sequence.length < 1) {
@@ -223,6 +247,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
         store.tryAdvanceLastSent(greenInstanceDbId, normalized, nextIndex, newIndex),
       );
       if (!advance.success) {
+        console.log('[LOCK_RESULT] fail reason=race_or_db');
         console.log('[LOCK] Skipped duplicate execution');
         console.log('[LOCK] Skipped due to race condition');
         return;
@@ -252,6 +277,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
       store.tryAdvanceLastSent(greenInstanceDbId, normalized, currentIndex, currentIndex + 1),
     );
     if (!advanceSend.success) {
+      console.log('[LOCK_RESULT] fail reason=race_or_db');
       console.log('[LOCK] Skipped duplicate execution');
       console.log('[LOCK] Skipped due to race condition');
       return;
@@ -259,6 +285,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
     console.log('[LOCK] Acquired for', normalized);
   }
 
+  console.log('[REPLY_FLOW] executing template_send');
   console.log(`[${logPrefix}] Sending message`, nextIndex + 1, '/', sequence.length, 'to', normalized);
   const sendResult = await safeSend(chatId, text, greenApi);
   if (sendResult.ok) {
@@ -279,7 +306,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
 
 /**
  * @param {string} phone - Normalized phone (digits)
- * @param {{ greenApi: object, greenInstanceDbId: string }} opts
+ * @param {{ greenApi: object, greenInstanceDbId: string, incomingText?: string, lastIntentType?: string }} opts
  */
 async function onIncomingReply(phone, opts) {
   return runIncomingReply(phone, opts, state, 'ReplyFlow-Prod');
@@ -287,7 +314,7 @@ async function onIncomingReply(phone, opts) {
 
 /**
  * @param {string} phone
- * @param {{ greenApi: object, greenInstanceDbId: string }} opts
+ * @param {{ greenApi: object, greenInstanceDbId: string, incomingText?: string, lastIntentType?: string }} opts
  */
 async function onIncomingReplyTest(phone, opts) {
   return runIncomingReply(phone, opts, testState, 'ReplyFlow-Test');

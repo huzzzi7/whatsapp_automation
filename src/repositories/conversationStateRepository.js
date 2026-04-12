@@ -14,11 +14,15 @@ function mapRow(row) {
     }
   }
   if (!Array.isArray(sequence)) sequence = [];
-  return {
+  const out = {
     lastSentIndex: Number(row.last_sent_index) || 0,
     sequence,
     campaignId: row.campaign_id != null ? String(row.campaign_id) : undefined,
   };
+  if (row.status != null && String(row.status).trim() !== '') {
+    out.status = String(row.status).trim();
+  }
+  return out;
 }
 
 /**
@@ -30,7 +34,7 @@ async function getState(instanceId, phone) {
   const p = String(phone || '').trim();
   if (!gid || !p) return null;
   const [rows] = await pool.execute(
-    `SELECT last_sent_index, campaign_id, sequence_json
+    `SELECT last_sent_index, campaign_id, sequence_json, status
      FROM conversation_state
      WHERE green_instance_db_id = ? AND phone_normalized = ?
      LIMIT 1`,
@@ -43,7 +47,7 @@ async function getState(instanceId, phone) {
 /**
  * @param {string} instanceId
  * @param {string} phone
- * @param {{ lastSentIndex: number, sequence: string[], campaignId?: string }} data
+ * @param {{ lastSentIndex: number, sequence: string[], campaignId?: string, status?: string|null }} data
  */
 async function upsertState(instanceId, phone, data) {
   const gid = String(instanceId || '').trim();
@@ -52,20 +56,47 @@ async function upsertState(instanceId, phone, data) {
   const seq = Array.isArray(data.sequence) ? data.sequence : [];
   const campaignId = data.campaignId != null ? String(data.campaignId).slice(0, 255) : null;
   const lastSent = Math.floor(Number(data.lastSentIndex) || 0);
-  await pool.execute(
-    `INSERT INTO conversation_state (
-      green_instance_db_id,
-      phone_normalized,
-      last_sent_index,
-      campaign_id,
-      sequence_json
-    ) VALUES (?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE
-      last_sent_index = VALUES(last_sent_index),
-      campaign_id = VALUES(campaign_id),
-      sequence_json = VALUES(sequence_json)`,
-    [gid, p, lastSent, campaignId, JSON.stringify(seq)],
-  );
+  const hasStatusKey = Object.prototype.hasOwnProperty.call(data, 'status');
+  const status = hasStatusKey
+    ? data.status != null && String(data.status).trim() !== ''
+      ? String(data.status).trim().slice(0, 32)
+      : null
+    : null;
+
+  if (hasStatusKey) {
+    await pool.execute(
+      `INSERT INTO conversation_state (
+        green_instance_db_id,
+        phone_normalized,
+        last_sent_index,
+        campaign_id,
+        sequence_json,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        last_sent_index = VALUES(last_sent_index),
+        campaign_id = VALUES(campaign_id),
+        sequence_json = VALUES(sequence_json),
+        status = VALUES(status)`,
+      [gid, p, lastSent, campaignId, JSON.stringify(seq), status],
+    );
+  } else {
+    await pool.execute(
+      `INSERT INTO conversation_state (
+        green_instance_db_id,
+        phone_normalized,
+        last_sent_index,
+        campaign_id,
+        sequence_json,
+        status
+      ) VALUES (?, ?, ?, ?, ?, NULL)
+      ON DUPLICATE KEY UPDATE
+        last_sent_index = VALUES(last_sent_index),
+        campaign_id = VALUES(campaign_id),
+        sequence_json = VALUES(sequence_json)`,
+      [gid, p, lastSent, campaignId, JSON.stringify(seq)],
+    );
+  }
 }
 
 /**
