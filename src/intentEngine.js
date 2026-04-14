@@ -21,7 +21,7 @@ function detectIntent(text) {
   if (notInterested) {
     return {
       type: 'NOT_INTERESTED',
-      reply: 'No worries.',
+      reply: 'No worries xx.',
       stopSequence: true,
     };
   }
