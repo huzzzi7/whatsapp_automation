@@ -21,7 +21,7 @@ function detectIntent(text) {
   if (notInterested) {
     return {
       type: 'NOT_INTERESTED',
-      reply: 'No problem 👍 If you change your mind later, feel free to message me anytime.',
+      reply: 'No worries.',
       stopSequence: true,
     };
   }
