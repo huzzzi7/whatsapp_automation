@@ -4,14 +4,65 @@
  */
 const { normalizePhone, toChatId } = require('./phone');
 const { buildSequence } = require('./messages');
-const { sendMessage } = require('./greenapi');
+const { enqueueMessage } = require('./queues/enqueueMessage');
 const state = require('./state');
 const testState = require('./testState');
 const appConfig = require('../config');
+const { createLogger } = require('./utils/logger');
 
-function sleep(ms) {
-  if (ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => setTimeout(resolve, ms));
+const inFlightMap = new Map();
+const logWebhook = createLogger('webhook');
+
+function buildInFlightKey(instanceId, phone, index) {
+  return `${instanceId}:${phone}:${index}`;
+}
+
+function acquireInFlightLock(key) {
+  if (inFlightMap.has(key)) return false;
+  inFlightMap.set(key, Date.now());
+  return true;
+}
+
+function releaseInFlightLock(key) {
+  inFlightMap.delete(key);
+}
+
+function pickRandomMessage(message) {
+  if (Array.isArray(message) && message.length > 0) {
+    const index = Math.floor(Math.random() * message.length);
+    return message[index];
+  }
+  return message;
+}
+
+function getMessageCooldownMs() {
+  const raw = parseInt(process.env.MESSAGE_COOLDOWN_MS || '120000', 10);
+  if (!Number.isFinite(raw) || raw < 0) return 120000;
+  return raw;
+}
+
+function getReplyContextCooldownMs() {
+  const raw = parseInt(process.env.REPLY_COOLDOWN_MS || '120000', 10);
+  if (!Number.isFinite(raw) || raw < 0) return 120000;
+  return raw;
+}
+
+const DEFAULT_SEND_FIRST_MESSAGE_CONCURRENCY = 1;
+
+/**
+ * First-message batch concurrency from SEND_FIRST_MESSAGE_CONCURRENCY (integer ≥ 1).
+ * Unset or invalid → 1 (sequential, Phase 1.1 fix).
+ */
+function getSendFirstMessageConcurrency() {
+  const raw = process.env.SEND_FIRST_MESSAGE_CONCURRENCY;
+  if (raw == null || String(raw).trim() === '') {
+    return DEFAULT_SEND_FIRST_MESSAGE_CONCURRENCY;
+  }
+  const n = parseInt(String(raw).trim(), 10);
+  if (!Number.isFinite(n) || n < 1) {
+    return DEFAULT_SEND_FIRST_MESSAGE_CONCURRENCY;
+  }
+  return n;
 }
 
 /** Parallel map with bounded concurrency (Green API safety). */
@@ -35,15 +86,76 @@ async function runWithConcurrency(items, limit, fn) {
  * @param {string} chatId
  * @param {string} message
  * @param {{ instanceId: string, apiToken: string, baseUrl: string }} greenApi
+ * @param {{ store?: StateStore, greenInstanceDbId?: string, phone?: string, pipelineContext?: string, messageCount?: number, lastMessageAt?: number }} [context]
  */
-async function safeSend(chatId, message, greenApi) {
+async function safeSend(chatId, message, greenApi, context = {}) {
   try {
-    await sendMessage(chatId, message, greenApi);
-    console.log('[GreenAPI] Message sent to', chatId);
+    const { store, greenInstanceDbId, phone } = context || {};
+    const cid =
+      context.campaignId != null && String(context.campaignId).trim() !== ''
+        ? String(context.campaignId).trim()
+        : undefined;
+    const trace = createLogger('server', {
+      campaignId: cid,
+      chatId,
+      phoneDigits: phone ? String(phone).replace(/\D/g, '') : undefined,
+    });
+    // Phase 1.5 fix: reply-triggered sends use shorter cooldown for human-paced conversations;
+    // campaign context keeps full MESSAGE_COOLDOWN_MS (burst protection).
+    const pipelineContext = context.pipelineContext || 'reply';
+    const isReplyContext = pipelineContext === 'reply' || pipelineContext === 'sequence';
+    const cooldownMs = isReplyContext ? getReplyContextCooldownMs() : getMessageCooldownMs();
+    if (store && greenInstanceDbId && phone) {
+      const possibleKeys = [String(phone || '').replace(/\D/g, ''), String(phone || '').replace(/\D/g, '').replace(/^0+/, '')];
+      const uniqueKeys = [...new Set(possibleKeys.filter((k) => k && k.length > 0))];
+      let currentState = null;
+      for (const key of uniqueKeys) {
+        currentState = await Promise.resolve(store.getState(greenInstanceDbId, key));
+        if (currentState) break;
+      }
+      const lastOutboundAt = Number(currentState?.lastOutboundAt);
+      if (Number.isFinite(lastOutboundAt)) {
+        const timeSinceLast = Date.now() - lastOutboundAt;
+        if (timeSinceLast < cooldownMs) {
+          trace.debug({ event: 'send_cooldown_active', pipelineContext }, 'send_cooldown_active');
+          return { ok: false, skipped: 'cooldown' };
+        }
+      }
+    }
+    trace.debug({ event: 'send_cooldown_passed', pipelineContext }, 'send_cooldown_passed');
+    const finalMessage = pickRandomMessage(message);
+    trace.debug({ event: 'send_message_selected', pipelineContext }, 'send_message_selected');
+    const messageCount = context.messageCount != null ? context.messageCount : 0;
+    const lastMessageAt = context.lastMessageAt;
+    const result = await enqueueMessage(
+      {
+        instanceId: greenApi.instanceId,
+        apiToken: greenApi.apiToken,
+        baseUrl: greenApi.baseUrl,
+        chatId,
+        message: finalMessage,
+        context: pipelineContext,
+        messageCount,
+        lastMessageAt,
+        greenInstanceDbId: context.greenInstanceDbId || '',
+        phoneDigits: context.phone || '',
+        campaignId: cid || '',
+      },
+      'message',
+    );
+    if (result.queued) {
+      trace.debug({ event: 'message_enqueued', pipelineContext }, 'message_enqueued');
+      return { ok: true, queued: true };
+    }
+    if (result.skipped) {
+      trace.debug({ event: 'message_skipped_enqueue', pipelineContext }, 'message_skipped_enqueue');
+      return { ok: false, skipped: 'pipeline' };
+    }
+    trace.debug({ event: 'message_sent_direct', pipelineContext, delayMs: result.delay }, 'message_sent_direct');
     return { ok: true };
   } catch (err) {
     const msg = err?.message || 'Send failed';
-    console.error('[GreenAPI] Failed sending to', chatId, msg);
+    createLogger('server', { chatId }).error({ err: msg, event: 'safe_send_failed' }, 'Failed sending');
     return { ok: false, error: msg };
   }
 }
@@ -56,7 +168,7 @@ async function safeSend(chatId, message, greenApi) {
  * Send message 1 to each user and persist progress (reply-driven continuation uses same store).
  * @param {Array} users
  * @param {Object} config - { messageTemplates }
- * @param {{ greenApi: object, greenInstanceDbId: string, messageDelayMs?: number, stableCampaignId?: string, pauseCheck?: () => Promise<boolean> }} opts
+ * @param {{ greenApi: object, greenInstanceDbId: string, stableCampaignId?: string, pauseCheck?: () => Promise<boolean> }} opts
  *   pauseCheck: if returns true, stop sending remaining users in this batch (partial send).
  * @param {StateStore} store
  * @param {string} campaignIdPrefix - e.g. "campaign-" or "test-" (ignored if opts.stableCampaignId is set)
@@ -65,7 +177,7 @@ async function safeSend(chatId, message, greenApi) {
  */
 async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaignIdPrefix, hooks = {}) {
   const { messageTemplates } = config;
-  const { greenApi, greenInstanceDbId, messageDelayMs = 0, stableCampaignId, pauseCheck } = opts || {};
+  const { greenApi, greenInstanceDbId, stableCampaignId, pauseCheck } = opts || {};
   const { shouldSkipUser } = hooks;
 
   if (!greenApi || !greenInstanceDbId) {
@@ -80,8 +192,9 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
   const failedSends = {};
 
   const list = Array.isArray(users) ? users : [];
-  const delay = Math.max(0, Number(messageDelayMs) || 0);
-  const SEND_FIRST_MESSAGE_CONCURRENCY = 8;
+  const SEND_FIRST_MESSAGE_CONCURRENCY = getSendFirstMessageConcurrency();
+  const campLog = createLogger('server', { campaignId });
+  campLog.debug({ event: 'campaign_first_message_concurrency', concurrency: SEND_FIRST_MESSAGE_CONCURRENCY }, 'first_message_concurrency');
   let batchPaused = false;
 
   await runWithConcurrency(list, SEND_FIRST_MESSAGE_CONCURRENCY, async (user) => {
@@ -90,7 +203,7 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
       const shouldPause = await pauseCheck();
       if (shouldPause) {
         batchPaused = true;
-        console.log('[Campaign] pauseCheck: stopping mid-batch');
+        campLog.info({ event: 'campaign_pause_mid_batch' }, 'pauseCheck: stopping mid-batch');
         return;
       }
     }
@@ -105,7 +218,7 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
 
     const sequence = user.sequence || buildSequence(user, messageTemplates);
     if (!sequence || sequence.length < 1) {
-      console.warn('[Campaign] Invalid message sequence for', phoneDigits);
+      campLog.warn({ event: 'campaign_invalid_sequence', phoneDigits }, 'Invalid message sequence');
       return;
     }
 
@@ -115,26 +228,32 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
     const text = sequence[0];
     if (text == null || String(text).trim() === '') return;
 
-    console.log('[Campaign] Sending message 1 to', phoneDigits);
-    const sendResult = await safeSend(chatId, text, greenApi);
+    campLog.debug({ event: 'campaign_dispatch_message_1', phoneDigits, chatId }, 'Sending message 1');
+    const priorState = await Promise.resolve(store.getState(greenInstanceDbId, phoneDigits));
+    const sendResult = await safeSend(chatId, text, greenApi, {
+      store,
+      greenInstanceDbId,
+      phone: phoneDigits,
+      pipelineContext: 'campaign',
+      messageCount: 0,
+      lastMessageAt: priorState?.lastOutboundAt,
+      campaignId,
+    });
     if (sendResult.ok) {
       store.setState(greenInstanceDbId, phoneDigits, {
         lastSentIndex: 1,
         sequence,
         campaignId,
+        lastOutboundAt: Date.now(),
       });
       startedUsers += 1;
       sentPhoneDigits.push(phoneDigits);
     } else if (sendResult.error) {
       failedSends[phoneDigits] = sendResult.error;
     }
-
-    if (delay > 0) {
-      await sleep(delay);
-    }
   });
 
-  console.log('[Campaign] Conversations started:', startedUsers);
+  campLog.info({ event: 'campaign_first_messages_dispatched', startedUsers }, 'Conversations started (message 1)');
   return { startedUsers, sentPhoneDigits, failedSends };
 }
 
@@ -142,7 +261,7 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
  * Send only message 1 to each user (production state). Same behavior as before refactor.
  * @param {Array} users
  * @param {Object} config - { messageTemplates }
- * @param {{ greenApi: object, greenInstanceDbId: string, messageDelayMs?: number }} opts
+ * @param {{ greenApi: object, greenInstanceDbId: string }} opts
  */
 async function sendFirstMessageOnly(users, config, opts) {
   const { greenInstanceDbId } = opts || {};
@@ -152,7 +271,10 @@ async function sendFirstMessageOnly(users, config, opts) {
       if (existing != null && existing.lastSentIndex >= 1) {
         const cid = String(existing.campaignId || '');
         if (!cid.startsWith('test-')) {
-          console.log('[Campaign] Skipping', phoneDigits, 'conversation already started');
+          createLogger('server', { phoneDigits }).debug(
+            { event: 'campaign_skip_already_started' },
+            'Skipping conversation already started',
+          );
           return true;
         }
       }
@@ -169,13 +291,13 @@ async function sendFirstMessageOnly(users, config, opts) {
  */
 async function runIncomingReply(phone, opts, store, logPrefix) {
   const { greenApi, greenInstanceDbId, incomingText, lastIntentType } = opts || {};
+  const flow = logWebhook.child({ logPrefix });
   if (!greenApi || !greenInstanceDbId) {
-    console.error(`[${logPrefix}] Missing greenApi or greenInstanceDbId`);
+    flow.error({ event: 'reply_flow_missing_config' }, 'Missing greenApi or greenInstanceDbId');
     return;
   }
 
-  console.log(`[${logPrefix}] Incoming phone:`, phone);
-  console.log(`[${logPrefix}] Instance:`, greenInstanceDbId);
+  flow.debug({ event: 'incoming_reply_phone', phone, greenInstanceDbId }, 'Incoming reply');
 
   let normalized = String(phone || '').replace(/\D/g, '');
   if (!normalized) return;
@@ -193,34 +315,38 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
   }
 
   if (userState == null) {
-    console.log(`[${logPrefix}] Unknown phone ignored:`, phone);
-    console.log('[REPLY_FLOW] skipped reason=unknown_phone');
+    flow.debug({ event: 'unknown_phone_ignored', phone }, 'Unknown phone ignored');
     return;
   }
 
+  const trace = flow.child({
+    campaignId: userState.campaignId != null ? String(userState.campaignId) : undefined,
+    phoneDigits: normalized,
+    chatId: toChatId(normalized) || undefined,
+  });
+
   const statusNorm = String(userState.status || '').toLowerCase();
-  console.log('[STATE_STATUS]', statusNorm || 'active');
+  trace.debug({ event: 'state_status', status: statusNorm || 'active' }, 'state_status');
 
   if (statusNorm === 'stopped') {
     const ltRaw = lastIntentType != null && String(lastIntentType).trim() !== '' ? String(lastIntentType).trim() : '';
     const intentUpper = ltRaw ? ltRaw.toUpperCase() : '';
     const inboundLower = String(incomingText || '').toLowerCase();
     const restartPhrases = /\b(restart|continue|start)\b/i.test(inboundLower);
-    const allowResume =
-      restartPhrases || (intentUpper !== '' && intentUpper !== 'NOT_INTERESTED');
+    const allowResume = restartPhrases;
 
     if (allowResume) {
       const cleared = { ...userState, status: 'active' };
       store.setState(greenInstanceDbId, normalized, cleared);
       userState = cleared;
-      console.log('[STATE_STATUS] resumed active (override after non-opt-out or restart phrase)');
+      trace.info({ event: 'user_resumed_active' }, 'Resumed active after restart phrase or non-opt-out intent');
     } else {
-      console.log('[REPLY_FLOW] skipped reason=user_stopped_opt_out');
+      trace.debug({ event: 'skipped_user_stopped_opt_out' }, 'skipped user_stopped_opt_out');
       return;
     }
   }
 
-  console.log(`[${logPrefix}] State found, lastSentIndex:`, userState.lastSentIndex);
+  trace.debug({ event: 'state_found', lastSentIndex: userState.lastSentIndex }, 'State found');
   const sequence = userState.sequence;
   if (!sequence || sequence.length < 1) {
     store.deleteState(greenInstanceDbId, normalized);
@@ -234,7 +360,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
 
   const nextIndex = userState.lastSentIndex;
   if (nextIndex >= sequence.length) {
-    console.error(`[${logPrefix}] Invalid conversation state for`, normalized);
+    trace.error({ event: 'invalid_conversation_state', normalized }, 'Invalid conversation state');
     store.deleteState(greenInstanceDbId, normalized);
     return;
   }
@@ -247,20 +373,18 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
         store.tryAdvanceLastSent(greenInstanceDbId, normalized, nextIndex, newIndex),
       );
       if (!advance.success) {
-        console.log('[LOCK_RESULT] fail reason=race_or_db');
-        console.log('[LOCK] Skipped duplicate execution');
-        console.log('[LOCK] Skipped due to race condition');
+        trace.debug({ event: 'lock_race_empty_message_branch' }, 'Skipped duplicate execution (race)');
         return;
       }
-      console.log('[LOCK] Acquired for', normalized);
+      trace.debug({ event: 'lock_acquired_empty_message_branch', normalized }, 'Lock acquired');
       if (newIndex >= sequence.length) {
         store.deleteState(greenInstanceDbId, normalized);
-        console.log(`[${logPrefix}] Conversation completed for`, normalized);
+        trace.info({ event: 'conversation_completed' }, 'Conversation completed');
       }
     } else {
       if (newIndex >= sequence.length) {
         store.deleteState(greenInstanceDbId, normalized);
-        console.log(`[${logPrefix}] Conversation completed for`, normalized);
+        trace.info({ event: 'conversation_completed' }, 'Conversation completed');
       } else {
         store.updateLastSent(greenInstanceDbId, normalized, newIndex);
       }
@@ -272,35 +396,74 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
   if (!chatId) return;
 
   const currentIndex = userState.lastSentIndex;
-  if (typeof store.tryAdvanceLastSent === 'function') {
-    const advanceSend = await Promise.resolve(
-      store.tryAdvanceLastSent(greenInstanceDbId, normalized, currentIndex, currentIndex + 1),
+  const lockKey = buildInFlightKey(greenInstanceDbId, normalized, currentIndex);
+  const lockAcquired = acquireInFlightLock(lockKey);
+  if (lockAcquired === false) {
+    trace.debug({ event: 'lock_blocked_duplicate', lockKey }, 'Duplicate send blocked');
+    return;
+  }
+  trace.debug({ event: 'lock_acquired', lockKey }, 'Lock acquired');
+  // MOVED POST-SEND to prevent sequence skip bug
+
+  try {
+    trace.debug(
+      { event: 'template_send_start', sequenceIndex: currentIndex, seqLen: sequence.length },
+      'Sending sequence message',
     );
-    if (!advanceSend.success) {
-      console.log('[LOCK_RESULT] fail reason=race_or_db');
-      console.log('[LOCK] Skipped duplicate execution');
-      console.log('[LOCK] Skipped due to race condition');
+    const sendResult = await safeSend(chatId, text, greenApi, {
+      store,
+      greenInstanceDbId,
+      phone: normalized,
+      pipelineContext: 'reply',
+      messageCount: currentIndex,
+      lastMessageAt: userState.lastOutboundAt,
+      campaignId: userState.campaignId != null ? String(userState.campaignId) : undefined,
+    });
+
+    if (sendResult?.ok !== true) {
+      if (sendResult?.skipped === 'cooldown' || sendResult?.skipped === 'pipeline') {
+        trace.debug({ event: 'send_skipped_index_unchanged', reason: sendResult?.skipped }, 'Send skipped');
+      } else {
+        trace.debug({ event: 'send_failed_index_unchanged' }, 'Index not advanced due to failed send');
+      }
       return;
     }
-    console.log('[LOCK] Acquired for', normalized);
-  }
 
-  console.log('[REPLY_FLOW] executing template_send');
-  console.log(`[${logPrefix}] Sending message`, nextIndex + 1, '/', sequence.length, 'to', normalized);
-  const sendResult = await safeSend(chatId, text, greenApi);
-  if (sendResult.ok) {
+    trace.debug({ event: 'send_success_advancing' }, 'Send success, advancing index');
     const newIndex = currentIndex + 1;
     if (typeof store.tryAdvanceLastSent === 'function') {
+      const advancePostSend = await Promise.resolve(
+        store.tryAdvanceLastSent(greenInstanceDbId, normalized, currentIndex, newIndex),
+      );
+      if (!advancePostSend.success) {
+        trace.debug({ event: 'lock_race_post_send' }, 'Skipped duplicate execution post-send');
+        return;
+      }
+      trace.debug({ event: 'lock_acquired_post_send', normalized }, 'Lock acquired post-send');
       if (newIndex >= sequence.length) {
         store.deleteState(greenInstanceDbId, normalized);
-        console.log(`[${logPrefix}] Conversation completed for`, normalized);
+        trace.info({ event: 'conversation_completed' }, 'Conversation completed');
+      } else {
+        store.setState(greenInstanceDbId, normalized, {
+          ...userState,
+          lastSentIndex: newIndex,
+          lastOutboundAt: Date.now(),
+        });
       }
     } else if (newIndex >= sequence.length) {
       store.deleteState(greenInstanceDbId, normalized);
-      console.log(`[${logPrefix}] Conversation completed for`, normalized);
+      trace.info({ event: 'conversation_completed' }, 'Conversation completed');
     } else {
       store.updateLastSent(greenInstanceDbId, normalized, newIndex);
+      store.setState(greenInstanceDbId, normalized, {
+        ...userState,
+        lastSentIndex: newIndex,
+        lastOutboundAt: Date.now(),
+      });
     }
+  } finally {
+    releaseInFlightLock(lockKey);
+    trace.debug({ event: 'lock_released', lockKey }, 'Lock released');
   }
 }
 

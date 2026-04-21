@@ -16,7 +16,7 @@ const POLL_MS = 1500;
  * @param {string} props.selectedInstanceId
  * @param {{ id: string; name?: string }[]} props.instances
  * @param {string} [props.campaignName]
- * @param {{ batchSize: number; delaySeconds: number; messageDelaySeconds?: number; templates: string[] }} props.campaignSettings
+ * @param {{ batchSize: number; templates: string[] }} props.campaignSettings
  * @param {{ phone?: string; university?: string; link?: string; group?: string; greenInstanceId?: string }} [props.testSettings]
  * @param {() => void} props.onBack
  * @param {(jobId: string) => void} props.onCampaignStart
@@ -99,8 +99,6 @@ export default function CampaignReviewStep({
           users,
           selectedInstanceId,
           campaignSettings.batchSize,
-          campaignSettings.delaySeconds,
-          Math.max(0, Number(campaignSettings.messageDelaySeconds) || 0),
           scheduledAtIso,
           trimmedName,
         );
@@ -276,12 +274,6 @@ export default function CampaignReviewStep({
         </p>
         <p style={{ margin: '0 0 0.5rem' }}>
           <strong>Batch size</strong>: {campaignSettings?.batchSize ?? '—'}
-        </p>
-        <p style={{ margin: '0 0 0.5rem' }}>
-          <strong>Delay between batches (seconds)</strong>: {campaignSettings?.delaySeconds ?? '—'}
-        </p>
-        <p style={{ margin: '0 0 0.5rem' }}>
-          <strong>Delay between messages</strong>: {campaignSettings?.messageDelaySeconds ?? 0} seconds
         </p>
         <p style={{ margin: '0 0 0.5rem' }}>
           <strong>Message 1 preview</strong>: {firstTemplate ? String(firstTemplate) : '—'}

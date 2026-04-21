@@ -61,12 +61,9 @@ export default function AutomationPage() {
   const [isTestModalOpen, setIsTestModalOpen] = useState(false);
   const [campaignSettings, setCampaignSettings] = useState({
     batchSize: 20,
-    delaySeconds: 30,
-    messageDelaySeconds: 0,
   });
   const [activeJob, setActiveJob] = useState(null);
   const [universityJobs, setUniversityJobs] = useState({});
-  const [nowTs, setNowTs] = useState(Date.now());
 
   const [instances, setInstances] = useState([]);
   const [selectedInstanceId, setSelectedInstanceId] = useState(() => {
@@ -143,8 +140,6 @@ export default function AutomationPage() {
     setMessageTemplateStrings(templates);
     setCampaignSettings({
       batchSize: Number(payload?.batchSize) || 20,
-      delaySeconds: Math.max(0, Number(payload?.delaySeconds) || 0),
-      messageDelaySeconds: Math.max(0, Number(payload?.messageDelaySeconds) || 0),
     });
     setUploadResult((prev) => (prev ? applyTemplatesToUploadResult(prev, templates) : prev));
     setIsMessageModalOpen(false);
@@ -154,17 +149,12 @@ export default function AutomationPage() {
     if (!job) return null;
     const totalUsers = Number(job.totalUsers) || 0;
     const processedUsers = Number(job.processedUsers) || 0;
-    const batchSize = Math.max(1, Number(job.batchSize) || 1);
-    const delaySeconds = Math.max(0, Number(job.delaySeconds) || 0);
-    const batchCount = Math.ceil(totalUsers / batchSize);
-    const totalTime = Math.max(0, (batchCount - 1) * delaySeconds);
-    const elapsedSeconds = Math.max(0, Math.floor((nowTs - Number(job.startedAt || Date.now())) / 1000));
     return {
       ...job,
       percentage: totalUsers > 0 ? (processedUsers / totalUsers) * 100 : 0,
-      remainingSeconds: Math.max(0, totalTime - elapsedSeconds),
+      remainingSeconds: null,
     };
-  }, [nowTs]);
+  }, []);
 
   const sendUsers = useCallback(async (users, meta, currentUpload) => {
     if (!users?.length) return;
@@ -177,13 +167,7 @@ export default function AutomationPage() {
       return;
     }
     try {
-      const data = await startCampaign(
-        users,
-        selectedInstanceId,
-        campaignSettings.batchSize,
-        campaignSettings.delaySeconds,
-        Math.max(0, Number(campaignSettings.messageDelaySeconds) || 0),
-      );
+      const data = await startCampaign(users, selectedInstanceId, campaignSettings.batchSize, undefined, undefined);
       if (data?.ok) {
         const baseJob = {
           jobId: data.jobId,
@@ -191,8 +175,6 @@ export default function AutomationPage() {
           totalUsers: users.length,
           processedUsers: 0,
           batchSize: campaignSettings.batchSize,
-          delaySeconds: campaignSettings.delaySeconds,
-          messageDelaySeconds: Math.max(0, Number(campaignSettings.messageDelaySeconds) || 0),
           startedAt: Date.now(),
           error: '',
           snapshot,
@@ -219,14 +201,6 @@ export default function AutomationPage() {
       setStatusType('error');
     }
   }, [selectedInstanceId, campaignSettings, navigate]);
-
-  useEffect(() => {
-    const hasActive = activeJob?.status === 'running'
-      || Object.values(universityJobs).some((j) => j?.status === 'running');
-    if (!hasActive) return undefined;
-    const id = setInterval(() => setNowTs(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [activeJob, universityJobs]);
 
   useEffect(() => {
     const running = [];

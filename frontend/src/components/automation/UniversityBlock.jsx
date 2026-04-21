@@ -4,7 +4,8 @@ import Button from '../ui/Button';
 import CampaignUsersTable from './CampaignUsersTable';
 
 function formatHms(totalSeconds) {
-  const safe = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  if (totalSeconds == null || !Number.isFinite(totalSeconds)) return '—';
+  const safe = Math.max(0, Math.floor(Number(totalSeconds)));
   const hours = Math.floor(safe / 3600);
   const minutes = Math.floor((safe % 3600) / 60);
   const seconds = safe % 60;

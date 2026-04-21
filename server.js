@@ -3,6 +3,11 @@
  * Serves frontend/dist, handles POST /api/upload, POST /api/send, POST /api/campaign/start, POST /api/campaign/test-message, POST /api/campaign/test-start, POST /api/webhook/greenapi.
  */
 require('dotenv').config();
+const { logger } = require('./src/utils/logger');
+const { messageQueue, replyQueue, followupQueue } = require('./src/queues');
+const { closeWorkers } = require('./src/queues/messageWorker');
+const { closeCoordinatorWorker } = require('./src/queues/coordinatorWorker');
+const { registerCoordinatorJob } = require('./src/queues/registerCoordinatorJob');
 const express = require('express');
 const session = require('express-session');
 const MySQLStore = require('express-mysql-session')(session);
@@ -20,12 +25,14 @@ const { buildSequence } = require('./src/messages');
 const { sendAllUsers } = require('./src/send');
 const { sendFirstMessageOnly, onIncomingReply, sendFirstMessageOnlyWithStore } = require('./src/replyFlow');
 const { normalizePhone, toChatId } = require('./src/phone');
-const { sendMessage: greenSendMessage } = require('./src/greenapi');
+const { controlledSend } = require('./src/services/controlledSend');
 const state = require('./src/state');
 const testState = require('./src/testState');
 const { processGreenApiWebhook, resolveGreenInstanceDbIdFromWebhookBody } = require('./src/processGreenApiWebhook');
 const { defaultTemplateStrings } = require('./src/campaignDefaults');
 const { resolveGreenApiConfig, maskApiToken } = require('./src/greenInstance');
+const { clearMessagesQueue } = require('./src/greenapi');
+const { clearPauseFlag, clearDepthCache } = require('./src/services/greenQueueMonitor');
 const { createJob, getJob, runCampaignJob } = require('./src/campaignJobs');
 const {
   createCampaign,
@@ -93,7 +100,7 @@ app.use(
 );
 
 app.use((req, res, next) => {
-  console.log(`[HTTP] ${req.method} ${req.url}`);
+  logger.debug({ event: 'http_request', method: req.method, url: req.url }, 'http_request');
   next();
 });
 
@@ -122,6 +129,13 @@ app.post(
   '/api/webhook/greenapi/:greenInstanceDbId',
   express.raw({ type: '*/*', limit: '5mb' }),
   (req, res) => {
+    console.log(
+      '[Webhook] Incoming POST hit:',
+      req.params.greenInstanceDbId,
+      '| body size:',
+      Buffer.isBuffer(req.body) ? req.body.length : req.body?.length || 0,
+      'bytes',
+    );
     const greenInstanceDbId = String(req.params.greenInstanceDbId || '').trim();
     const rawBuffer = req.body;
     let bodyPreview = '';
@@ -147,8 +161,9 @@ app.post(
 // Also accepts legacy/short paths used by some deployments: /api/greenapi and /greenapi
 function handleGreenApiWebhookNoId(req, res) {
   (async () => {
+    console.log('[Webhook] Fallback route hit (no instance id in URL)');
     console.log(
-      '[Webhook] Fallback route hit:',
+      '[Webhook] Fallback route detail:',
       req.method,
       req.originalUrl || req.url,
       'bytes:',
@@ -566,6 +581,49 @@ app.delete('/api/instances/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/instances/:id/clear-queue — Phase 4.3
+// Clears Green API outgoing queue + local pause flag + depth cache
+app.post('/api/instances/:id/clear-queue', requireAdmin, async (req, res) => {
+  const dbId = String(req.params.id || '').trim();
+  if (!dbId) {
+    return res.status(400).json({ ok: false, error: 'Missing instance id' });
+  }
+  try {
+    const [rows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [dbId]);
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).json({ ok: false, error: 'Instance not found' });
+    }
+
+    const greenApi = resolveGreenApiConfig(row);
+
+    let greenResult = null;
+    try {
+      greenResult = await clearMessagesQueue(greenApi);
+    } catch (greenErr) {
+      console.error('[ClearQueue] Green API clearMessagesQueue failed:', greenErr.message);
+    }
+
+    await clearPauseFlag(greenApi.instanceId);
+    clearDepthCache(greenApi.instanceId);
+
+    console.log(`[ClearQueue] Cleared queue for instanceId=${greenApi.instanceId} dbId=${dbId}`);
+
+    return res.json({
+      ok: true,
+      instanceId: greenApi.instanceId,
+      greenResult,
+      note:
+        greenResult === null
+          ? 'Green API clear failed — local state cleared only'
+          : 'Green API queue + local state cleared',
+    });
+  } catch (err) {
+    console.error('[ClearQueue] Unexpected error:', err.message);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // POST /api/upload – accept .xlsx, parse, return users + grouping
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
@@ -768,18 +826,9 @@ app.get('/api/campaign/stats', async (req, res) => {
 //
 app.post('/api/campaign/start', async (req, res) => {
   const body = req.body || {};
-  const {
-    users: bodyUsers,
-    greenInstanceId,
-    batchSize,
-    delaySeconds,
-    messageDelaySeconds: rawMessageDelaySeconds = 0,
-    scheduledAt: rawScheduledAt,
-  } = body;
+  const { users: bodyUsers, greenInstanceId, batchSize, scheduledAt: rawScheduledAt } = body;
   const campaignName =
     body.name && String(body.name).trim() ? String(body.name).trim() : null;
-  let messageDelaySeconds = Number(rawMessageDelaySeconds) || 0;
-  if (messageDelaySeconds < 0) messageDelaySeconds = 0;
   if (!bodyUsers || !Array.isArray(bodyUsers) || bodyUsers.length === 0) {
     return res.status(400).json({
       ok: false,
@@ -798,7 +847,6 @@ app.post('/api/campaign/start', async (req, res) => {
     }
 
     const safeBatchSize = Math.max(1, Math.floor(Number(batchSize) || 20));
-    const safeDelaySeconds = Math.max(0, Math.floor(Number(delaySeconds) || 30));
     const campaignId = uuidv4();
     const queueOrder = await getNextQueueOrder();
 
@@ -813,8 +861,6 @@ app.post('/api/campaign/start', async (req, res) => {
       greenInstanceId: gid,
       name: campaignName,
       batchSize: safeBatchSize,
-      delaySeconds: safeDelaySeconds,
-      messageDelaySeconds,
       totalContacts: bodyUsers.length,
       queueOrder,
       scheduledAt: scheduleDate,
@@ -942,7 +988,7 @@ app.post('/api/campaigns/:id/start', async (req, res) => {
 // GET /api/campaigns/active – running + paused + queued (register before /api/campaigns/:id)
 app.get('/api/campaigns/active', async (req, res) => {
   try {
-    console.log('[Campaigns] Fetching active campaigns');
+    logger.debug({ event: 'campaigns_active_fetch' }, 'campaigns_active_fetch');
     const runningAllRows = await getRunningCampaigns();
     const runningAll = runningAllRows.map((c) => formatCampaign(c));
     const paused = await getPausedCampaigns();
@@ -962,7 +1008,7 @@ app.get('/api/campaigns/active', async (req, res) => {
 // GET /api/campaigns – history; optional ?status=completed,failed,paused
 app.get('/api/campaigns', async (req, res) => {
   try {
-    console.log('[Campaigns] Fetching campaign history');
+    logger.debug({ event: 'campaigns_history_fetch' }, 'campaigns_history_fetch');
     const raw = String(req.query.status || '').trim();
     const parts = raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
     const campaigns = await listCampaigns({ statuses: parts.length > 0 ? parts : undefined });
@@ -1060,8 +1106,6 @@ app.get('/api/campaign/status/:jobId', async (req, res) => {
     totalUsers: job.totalUsers,
     processedUsers: job.processedUsers,
     batchSize: job.batchSize,
-    delaySeconds: job.delaySeconds,
-    messageDelaySeconds: job.messageDelaySeconds ?? 0,
     startedAt: job.startedAt,
     error: job.error || '',
   });
@@ -1087,8 +1131,6 @@ app.get('/api/campaign/status/:jobId', async (req, res) => {
       totalUsers: c.totalContacts,
       processedUsers,
       batchSize: c.batchSize ?? 20,
-      delaySeconds: c.delaySeconds ?? 30,
-      messageDelaySeconds: c.messageDelaySeconds ?? 0,
       startedAt: startedAtMs,
       error: c.errorMessage || '',
     });
@@ -1159,7 +1201,24 @@ app.post('/api/campaign/test-message', async (req, res) => {
     }
     const greenApi = resolveGreenApiConfig(row);
     const chatId = toChatId(normalized);
-    await greenSendMessage(chatId, message1, greenApi);
+    const testSend = await controlledSend({
+      instanceId: greenApi.instanceId,
+      apiToken: greenApi.apiToken,
+      baseUrl: greenApi.baseUrl,
+      chatId,
+      message: message1,
+      context: 'reply',
+      messageCount: 0,
+      lastMessageAt: undefined,
+    });
+    if (testSend.skipped) {
+      return res.status(200).json({
+        ok: false,
+        replyAutomation: false,
+        warning: 'Replies will not trigger automation.',
+        error: 'Message skipped by send pipeline (try again).',
+      });
+    }
 
     const seqForState = sequence.map((s) => String(s ?? '').trim());
     const campaignId = `test-msg-${Date.now()}`;
@@ -1392,19 +1451,49 @@ app.get('/{*splat}', (req, res) => {
   return res.sendFile(frontendIndexPath);
 });
 
-console.log('Starting server...');
+logger.info({ event: 'server_starting' }, 'Starting server...');
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log('Webhook (per instance): POST /api/webhook/greenapi/<green_instances.id>');
+  logger.info({ event: 'server_listen', port: PORT }, `Server running on port ${PORT}`);
+  logger.info(
+    { event: 'webhook_route_hint' },
+    'Webhook (per instance): POST /api/webhook/greenapi/<green_instances.id>',
+  );
   try {
     const prodCount = Object.keys(state.loadState()).length;
     const testCount = Object.keys(testState.loadState()).length;
-    console.log('[State] Loaded prod keys:', prodCount, '| test keys:', testCount);
+    logger.info({ event: 'state_loaded', prodKeys: prodCount, testKeys: testCount }, 'Conversation state keys loaded');
   } catch (err) {
-    console.error('[State ERROR]', err.message);
+    logger.error({ err: err.message, event: 'state_load_error' }, 'State load error');
   }
-  setInterval(() => {
-    tryRunNext().catch(console.error);
-  }, 3000);
+  // Task 3.3 — BullMQ workers (module already loaded for closeWorkers; ensure module evaluated)
+  require('./src/queues/messageWorker');
+  logger.info({ event: 'bullmq_workers_started' }, 'BullMQ message workers started');
+  // Task 3.4 — BullMQ coordinator replaces setInterval
+  require('./src/queues/coordinatorWorker');
+  registerCoordinatorJob().catch((err) =>
+    logger.error({ err: err.message, event: 'coordinator_register_failed' }, 'Failed to register coordinator job'),
+  );
+  logger.info({ event: 'bullmq_coordinator_registered' }, 'BullMQ coordinator tick registered (every 3000ms)');
+});
+
+process.on('SIGTERM', async () => {
+  logger.info({ event: 'shutdown_sigterm' }, 'SIGTERM received, closing workers...');
+  await Promise.all([closeWorkers(), closeCoordinatorWorker()]);
+  try {
+    await pool.end();
+  } catch (e) {
+    logger.error({ err: e?.message, event: 'shutdown_pool_end' }, 'MySQL pool.end() failed');
+  }
+  process.exit(0);
+});
+process.on('SIGINT', async () => {
+  logger.info({ event: 'shutdown_sigint' }, 'SIGINT received, closing workers...');
+  await Promise.all([closeWorkers(), closeCoordinatorWorker()]);
+  try {
+    await pool.end();
+  } catch (e) {
+    logger.error({ err: e?.message, event: 'shutdown_pool_end' }, 'MySQL pool.end() failed');
+  }
+  process.exit(0);
 });

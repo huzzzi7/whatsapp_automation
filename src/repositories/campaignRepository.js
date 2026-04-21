@@ -25,8 +25,6 @@ function mapCampaignRow(row) {
     skippedCount:
       row.skipped_count != null && row.skipped_count !== undefined ? Number(row.skipped_count) || 0 : 0,
     batchSize: row.batch_size,
-    delaySeconds: row.delay_seconds,
-    messageDelaySeconds: row.message_delay_seconds,
     errorMessage: row.error_message,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -37,15 +35,13 @@ function mapCampaignRow(row) {
 }
 
 /**
- * @param {{ id: string, greenInstanceId: string, name?: string|null, batchSize: number, delaySeconds: number, messageDelaySeconds: number, totalContacts: number, queueOrder: number, scheduledAt?: Date|string|null }} params
+ * @param {{ id: string, greenInstanceId: string, name?: string|null, batchSize: number, totalContacts: number, queueOrder: number, scheduledAt?: Date|string|null }} params
  */
 async function createCampaign({
   id,
   greenInstanceId,
   name = null,
   batchSize,
-  delaySeconds,
-  messageDelaySeconds,
   totalContacts,
   queueOrder,
   scheduledAt = null,
@@ -58,8 +54,8 @@ async function createCampaign({
   await pool.execute(
     `INSERT INTO campaigns (
       id, green_instance_id, name, status, queue_order, total_contacts,
-      batch_size, delay_seconds, message_delay_seconds, scheduled_at
-    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+      batch_size, scheduled_at
+    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)`,
     [
       id,
       greenInstanceId,
@@ -67,8 +63,6 @@ async function createCampaign({
       queueOrder,
       totalContacts,
       batchSize,
-      delaySeconds,
-      messageDelaySeconds,
       sched,
     ],
   );

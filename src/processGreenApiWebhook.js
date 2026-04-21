@@ -8,11 +8,13 @@ const pool = require('./mysql');
 const { parseIncomingNotification } = require('./receive');
 const { onIncomingReply, onIncomingReplyTest } = require('./replyFlow');
 const { resolveGreenApiConfig } = require('./greenInstance');
-const { sendMessage } = require('./greenapi');
+const { enqueueMessage } = require('./queues/enqueueMessage');
 const { detectIntent } = require('./intentEngine');
 const state = require('./state');
 const testState = require('./testState');
 const { insertIncomingMessage } = require('./repositories/incomingMessageRepository');
+const { clearMessagesQueue } = require('./greenapi');
+const { clearPauseFlag, clearDepthCache } = require('./services/greenQueueMonitor');
 
 /**
  * Green API timestamps are usually Unix seconds; Date.now() is ms. Normalize to ms then bucket by 5s.
@@ -36,6 +38,28 @@ function roundedTimestampBucket(rawTs) {
  * @param {number} timestamp
  * @param {string|null|undefined} providerMessageId
  */
+async function getPipelineMetaForPhone(greenInstanceDbId, keyVariants) {
+  for (const key of keyVariants) {
+    const prod = await Promise.resolve(state.getState(greenInstanceDbId, key));
+    if (prod) {
+      const idx = Math.floor(Number(prod.lastSentIndex));
+      return {
+        messageCount: Number.isFinite(idx) && idx >= 0 ? idx : 0,
+        lastMessageAt: prod.lastOutboundAt,
+      };
+    }
+    const tst = testState.getState(greenInstanceDbId, key);
+    if (tst) {
+      const idx = Math.floor(Number(tst.lastSentIndex));
+      return {
+        messageCount: Number.isFinite(idx) && idx >= 0 ? idx : 0,
+        lastMessageAt: tst.lastOutboundAt,
+      };
+    }
+  }
+  return { messageCount: 0, lastMessageAt: undefined };
+}
+
 function buildDedupeKey(greenInstanceDbId, phone, text, timestamp, providerMessageId) {
   const gid = String(greenInstanceDbId || '').trim();
   const p = String(phone || '').trim();
@@ -85,6 +109,33 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[WEBHOOK_DEBUG] Incoming webhook body:', JSON.stringify(body).slice(0, 2000));
   console.log('[Webhook] Raw body:', JSON.stringify(body).slice(0, 300));
   console.log('[Webhook] Body keys:', Object.keys(body).join(', '));
+
+  const webhookType = body?.typeWebhook || body?.body?.typeWebhook || '';
+  if (webhookType === 'statusInstanceChanged' || webhookType === 'stateInstanceChanged') {
+    const instanceStatus = body?.body?.stateInstance || body?.stateInstance || '';
+    console.log(
+      `[Webhook] Instance status changed: instanceId=${greenApi.instanceId} status=${instanceStatus}`,
+    );
+    const onlineStates = ['authorized', 'connected'];
+    if (onlineStates.some((s) => String(instanceStatus).toLowerCase().includes(s))) {
+      console.log(
+        `[Webhook] Instance reconnected — auto-clearing queue for instanceId=${greenApi.instanceId}`,
+      );
+      try {
+        await clearMessagesQueue(greenApi);
+      } catch (err) {
+        console.error('[Webhook] Auto clearMessagesQueue failed:', err.message);
+      }
+      try {
+        await clearPauseFlag(greenApi.instanceId);
+        clearDepthCache(greenApi.instanceId);
+      } catch (err) {
+        console.error('[Webhook] Auto clear local state failed:', err.message);
+      }
+    }
+    return;
+  }
+
   const parsed = parseIncomingNotification(body);
   if (!parsed || !parsed.phone) {
     console.log('[Webhook] Ignored notification (unparsed or no phone)');
@@ -135,6 +186,7 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[DEDUPE_RESULT] inserted');
 
   const intent = detectIntent(parsed.text);
+  let intentReplySent = false;
   console.log(
     '[INTENT_RESULT]',
     `type=${intent.type} stopSequence=${intent.stopSequence} reply=${intent.reply ? 'yes' : 'no'}`,
@@ -162,9 +214,29 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     console.log('[STOP_TRIGGERED] true');
     if (intent.reply && parsed.chatId) {
       try {
-        await sendMessage(parsed.chatId, intent.reply, greenApi);
+        const meta = await getPipelineMetaForPhone(greenInstanceDbId, keyVariants);
+        const stopSend = await enqueueMessage(
+          {
+            instanceId: greenApi.instanceId,
+            apiToken: greenApi.apiToken,
+            baseUrl: greenApi.baseUrl,
+            chatId: parsed.chatId,
+            message: intent.reply,
+            context: 'intent',
+            messageCount: meta.messageCount,
+            lastMessageAt: meta.lastMessageAt,
+            greenInstanceDbId: String(greenInstanceDbId || ''),
+            phoneDigits: String(parsed.phone || ''),
+          },
+          'reply',
+        );
+        if (stopSend.queued) {
+          console.log('[Intent] stop-sequence reply queued');
+        } else if (stopSend.skipped) {
+          console.log('[Intent] stop-sequence reply skipped by pipeline');
+        }
       } catch (err) {
-        console.error('[Intent] sendMessage failed:', err.message);
+        console.error('[Intent] enqueueMessage failed:', err.message);
       }
     }
     await persistStoppedStatus();
@@ -175,8 +247,33 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
 
   if (intent.reply && parsed.chatId) {
     try {
-      await sendMessage(parsed.chatId, intent.reply, greenApi);
-      console.log('[Intent] Custom reply sent');
+      const meta = await getPipelineMetaForPhone(greenInstanceDbId, keyVariants);
+      const intentSend = await enqueueMessage(
+        {
+          instanceId: greenApi.instanceId,
+          apiToken: greenApi.apiToken,
+          baseUrl: greenApi.baseUrl,
+          chatId: parsed.chatId,
+          message: intent.reply,
+          context: 'intent',
+          messageCount: meta.messageCount,
+          lastMessageAt: meta.lastMessageAt,
+          greenInstanceDbId: String(greenInstanceDbId || ''),
+          phoneDigits: String(parsed.phone || ''),
+        },
+        'reply',
+      );
+      if (intentSend.queued) {
+        console.log('[Intent] Custom reply queued');
+        intentReplySent = true;
+        console.log('Intent reply queued, blocking sequence');
+      } else if (intentSend.skipped) {
+        console.log('[Intent] Custom reply skipped by pipeline');
+      } else {
+        intentReplySent = true;
+        console.log('Intent reply sent, blocking sequence');
+        console.log('[Intent] Custom reply sent');
+      }
     } catch (err) {
       console.error('[Intent] Custom reply send failed:', err.message);
     }
@@ -224,11 +321,19 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Prod state keys:', Object.keys(state.loadState()));
   console.log('[Webhook] Test state keys:', Object.keys(testState.loadState()));
   if (hasTest) {
-    console.log('[REPLY_FLOW] executing test path');
-    await onIncomingReplyTest(parsed.phone, replyOpts);
+    if (intentReplySent) {
+      console.log('Sequence skipped due to intent reply');
+    } else {
+      console.log('[REPLY_FLOW] executing test path');
+      await onIncomingReplyTest(parsed.phone, replyOpts);
+    }
   } else if (hasProd) {
-    console.log('[REPLY_FLOW] executing prod path');
-    await onIncomingReply(parsed.phone, replyOpts);
+    if (intentReplySent) {
+      console.log('Sequence skipped due to intent reply');
+    } else {
+      console.log('[REPLY_FLOW] executing prod path');
+      await onIncomingReply(parsed.phone, replyOpts);
+    }
   } else {
     console.log('[REPLY_FLOW] skipped reason=no_conversation_state');
   }

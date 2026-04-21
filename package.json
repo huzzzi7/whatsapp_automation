@@ -7,9 +7,13 @@
     "check:node": "node -e \"const [major,minor]=process.versions.node.split('.').map(Number); const ok=(major>20)||(major===20&&minor>=19); if(!ok){console.error('ERROR: Node.js 20.19+ is required. Current: '+process.versions.node+'. Upgrade Node runtime for Vite 8/React Router 7 build compatibility.'); process.exit(1);} console.log('Node version OK:', process.versions.node);\"",
     "build": "npm run check:node && npm --prefix frontend install --include=dev && npm --prefix frontend run build",
     "postinstall": "npm run build",
-    "start": "npm run check:node && node server.js",
+    "check:env": "node scripts/check-env.js",
+    "start": "npm run check:node && node scripts/check-env.js && node server.js",
     "dry-run": "node index.js --dry-run",
     "server": "node server.js",
+    "logs": "node scripts/tail-app-log.js --out=logs/live-capture.log",
+    "logs:fresh": "node scripts/tail-app-log.js --out=auto",
+    "logs:snapshot": "powershell -ExecutionPolicy Bypass -File scripts/snapshot-logs.ps1",
     "create-admin": "node scripts/create-admin.js"
   },
   "engines": {
@@ -18,14 +22,21 @@
   "dependencies": {
     "axios": "^1.6.0",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.74.1",
     "cors": "^2.8.6",
     "dotenv": "^16.3.1",
     "express": "^5.2.1",
     "express-mysql-session": "^3.0.3",
     "express-session": "^1.19.0",
+    "ioredis": "^5.10.1",
     "multer": "^2.1.1",
     "mysql2": "^3.20.0",
+    "pino": "^10.3.1",
+    "rotating-file-stream": "^3.2.9",
     "uuid": "8.3.2",
     "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "pino-pretty": "^13.1.3"
   }
 }

@@ -150,7 +150,7 @@ function dualWriteMysqlDelete(greenInstanceDbId, phone) {
 /**
  * @param {string} greenInstanceDbId - green_instances.id
  * @param {string} phone - Normalized phone
- * @returns {Promise<{ lastSentIndex: number, sequence: string[], campaignId?: string }|null>}
+ * @returns {Promise<{ lastSentIndex: number, sequence: string[], campaignId?: string, lastOutboundAt?: number }|null>}
  */
 async function getState(greenInstanceDbId, phone) {
   const key = makeStateKey(greenInstanceDbId, phone);
@@ -161,6 +161,10 @@ async function getState(greenInstanceDbId, phone) {
     const fromDb = await conversationStateRepository.getState(greenInstanceDbId, phone);
     if (fromDb != null) {
       loadState();
+      const existing = _state[key];
+      if (existing && Number.isFinite(Number(existing.lastOutboundAt)) && !Number.isFinite(Number(fromDb.lastOutboundAt))) {
+        fromDb.lastOutboundAt = Number(existing.lastOutboundAt);
+      }
       _state[key] = fromDb;
       console.log('[STATE] Loaded from MySQL');
       return fromDb;
@@ -185,7 +189,7 @@ async function getState(greenInstanceDbId, phone) {
 /**
  * @param {string} greenInstanceDbId
  * @param {string} phone
- * @param {{ lastSentIndex: number, sequence: string[], campaignId?: string }} data
+ * @param {{ lastSentIndex: number, sequence: string[], campaignId?: string, lastOutboundAt?: number }} data
  */
 function setState(greenInstanceDbId, phone, data) {
   logStateKey(greenInstanceDbId, phone, 'setState');

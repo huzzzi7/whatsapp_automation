@@ -126,15 +126,7 @@ export async function createCampaignContact(payload) {
 }
 
 /** @param {string} greenInstanceId - green_instances.id */
-export async function startCampaign(
-  users,
-  greenInstanceId,
-  batchSize,
-  delaySeconds,
-  messageDelaySeconds = 0,
-  scheduledAt,
-  name,
-) {
+export async function startCampaign(users, greenInstanceId, batchSize, scheduledAt, name) {
   return apiFetch('/api/campaign/start', {
     method: 'POST',
     body: JSON.stringify({
@@ -142,8 +134,6 @@ export async function startCampaign(
       greenInstanceId,
       name,
       batchSize,
-      delaySeconds,
-      messageDelaySeconds,
       ...(scheduledAt != null && String(scheduledAt).trim() !== '' ? { scheduledAt } : {}),
     }),
   });

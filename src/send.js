@@ -8,12 +8,20 @@
  */
 const { normalizePhone, toChatId } = require('./phone');
 const { buildSequence } = require('./messages');
-const { sendMessage } = require('./greenapi');
+const { controlledSend } = require('./services/controlledSend');
 const state = require('./state');
 const appConfig = require('../config');
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Same rules as replyFlow.pickRandomMessage — templates may be string or string[]. */
+function pickRandomTemplate(message) {
+  if (Array.isArray(message) && message.length > 0) {
+    return message[Math.floor(Math.random() * message.length)];
+  }
+  return message;
 }
 
 /**
@@ -50,7 +58,8 @@ async function sendAllUsers(users, config, opts = {}) {
       let firstJ = -1;
       for (let j = 0; j < seqLen; j++) {
         const t = sequence[j];
-        if (t != null && String(t).trim() !== '') {
+        const resolved = pickRandomTemplate(t);
+        if (t != null && resolved != null && String(resolved).trim() !== '') {
           firstJ = j;
           break;
         }
@@ -61,15 +70,29 @@ async function sendAllUsers(users, config, opts = {}) {
       }
       if (!dryRun) {
         try {
-          await sendMessage(chatId, sequence[firstJ], greenApi);
-          console.log(
-            `[Send] ${phoneDigits} reply-driven: first outbound ${firstJ + 1}/${seqLen} ok (automation enabled)`,
-          );
-          state.setState(greenInstanceDbId, phoneDigits, {
-            lastSentIndex: firstJ + 1,
-            sequence,
-            campaignId: `send-${Date.now()}`,
+          const prior = await state.getState(greenInstanceDbId, phoneDigits);
+          const r = await controlledSend({
+            instanceId: greenApi.instanceId,
+            apiToken: greenApi.apiToken,
+            baseUrl: greenApi.baseUrl,
+            chatId,
+            message: pickRandomTemplate(sequence[firstJ]),
+            context: 'campaign',
+            messageCount: firstJ,
+            lastMessageAt: prior?.lastOutboundAt,
           });
+          if (r.skipped) {
+            console.log(`[Send] ${phoneDigits} first message skipped by pipeline`);
+          } else {
+            console.log(
+              `[Send] ${phoneDigits} reply-driven: first outbound ${firstJ + 1}/${seqLen} ok (automation enabled)`,
+            );
+            state.setState(greenInstanceDbId, phoneDigits, {
+              lastSentIndex: firstJ + 1,
+              sequence,
+              campaignId: `send-${Date.now()}`,
+            });
+          }
         } catch (err) {
           console.error(`[Send] ${phoneDigits} first message failed:`, err.message);
         }
@@ -80,12 +103,26 @@ async function sendAllUsers(users, config, opts = {}) {
 
     for (let j = 0; j < seqLen; j++) {
       const text = sequence[j];
-      if (text == null || String(text).trim() === '') continue;
+      const resolved = pickRandomTemplate(text);
+      if (text == null || resolved == null || String(resolved).trim() === '') continue;
 
       if (!dryRun) {
         try {
-          await sendMessage(chatId, text, greenApi);
-          console.log(`[Send] ${phoneDigits} message ${j + 1}/${seqLen} ok`);
+          const r = await controlledSend({
+            instanceId: greenApi.instanceId,
+            apiToken: greenApi.apiToken,
+            baseUrl: greenApi.baseUrl,
+            chatId,
+            message: resolved,
+            context: 'campaign',
+            messageCount: j,
+            lastMessageAt: undefined,
+          });
+          if (r.skipped) {
+            console.log(`[Send] ${phoneDigits} message ${j + 1}/${seqLen} skipped by pipeline`);
+          } else {
+            console.log(`[Send] ${phoneDigits} message ${j + 1}/${seqLen} ok`);
+          }
         } catch (err) {
           console.error(`[Send] ${phoneDigits} message ${j + 1}/${seqLen} failed:`, err.message);
         }

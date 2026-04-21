@@ -46,7 +46,7 @@ function detectIntent(text) {
   if (/\b(yes|interested|ok)\b/i.test(msg) || /\btell me\b/i.test(msg) || /\bdetails\b/i.test(msg)) {
     return {
       type: 'INTERESTED',
-      reply: 'Great 👍 Let me guide you step by step.',
+      reply: null,
       stopSequence: false,
     };
   }

@@ -20,8 +20,6 @@ export default function CampaignWizardPage() {
     uploadResult: null,
     campaignSettings: {
       batchSize: 10,
-      delaySeconds: 5,
-      messageDelaySeconds: 0,
       templates: [...DEFAULT_CAMPAIGN_TEMPLATE_STRINGS],
     },
     testState: {
@@ -104,9 +102,7 @@ export default function CampaignWizardPage() {
         Array.isArray(templates) && templates.length >= 1 && String(templates[0] ?? '').trim();
       const batchNum = Number(cs.batchSize);
       const batchOk = Number.isFinite(batchNum) && Math.floor(batchNum) >= 1;
-      const md = Number(cs.messageDelaySeconds);
-      const messageDelayOk = Number.isFinite(md) && md >= 0;
-      if (!hasTemplates || !batchOk || !messageDelayOk) {
+      if (!hasTemplates || !batchOk) {
         setStepError('Please configure valid campaign settings');
         return;
       }

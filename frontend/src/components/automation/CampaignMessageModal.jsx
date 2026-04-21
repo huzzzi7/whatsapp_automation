@@ -7,8 +7,8 @@ import CampaignSettingsForm, { validateCampaignSettings } from '../campaign/Camp
  * @param {boolean} props.open
  * @param {() => void} props.onClose
  * @param {string[]} props.messageTemplateStrings
- * @param {{ batchSize: number, delaySeconds: number, messageDelaySeconds?: number }} props.campaignSettings
- * @param {(payload: { templates: string[], batchSize: number, delaySeconds: number, messageDelaySeconds?: number }) => void} props.onSave
+ * @param {{ batchSize: number }} props.campaignSettings
+ * @param {(payload: { templates: string[], batchSize: number }) => void} props.onSave
  */
 export default function CampaignMessageModal({
   open,
@@ -23,8 +23,6 @@ export default function CampaignMessageModal({
   const [formValue, setFormValue] = useState(() => ({
     templates: [...messageTemplateStrings],
     batchSize: Number(campaignSettings?.batchSize) || 20,
-    delaySeconds: Number(campaignSettings?.delaySeconds) || 30,
-    messageDelaySeconds: Math.max(0, Number(campaignSettings?.messageDelaySeconds) || 0),
   }));
   const [saveError, setSaveError] = useState('');
 
@@ -33,8 +31,6 @@ export default function CampaignMessageModal({
       setFormValue({
         templates: [...messageTemplateStrings],
         batchSize: Number(campaignSettings?.batchSize) || 20,
-        delaySeconds: Number(campaignSettings?.delaySeconds) || 30,
-        messageDelaySeconds: Math.max(0, Number(campaignSettings?.messageDelaySeconds) || 0),
       });
       setSaveError('');
     }
