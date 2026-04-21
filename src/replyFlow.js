@@ -86,7 +86,7 @@ async function runWithConcurrency(items, limit, fn) {
  * @param {string} chatId
  * @param {string} message
  * @param {{ instanceId: string, apiToken: string, baseUrl: string }} greenApi
- * @param {{ store?: StateStore, greenInstanceDbId?: string, phone?: string, pipelineContext?: string, messageCount?: number, lastMessageAt?: number }} [context]
+ * @param {{ store?: StateStore, greenInstanceDbId?: string, phone?: string, pipelineContext?: string, messageCount?: number, lastMessageAt?: number, firstMessage?: boolean }} [context]
  */
 async function safeSend(chatId, message, greenApi, context = {}) {
   try {
@@ -112,11 +112,20 @@ async function safeSend(chatId, message, greenApi, context = {}) {
         if (currentState) break;
       }
       const lastOutboundAt = Number(currentState?.lastOutboundAt);
-      if (pipelineContext === 'campaign' && Number.isFinite(lastOutboundAt)) {
+      if (pipelineContext === 'campaign' && !context.firstMessage && Number.isFinite(lastOutboundAt)) {
         const cooldownMs = getMessageCooldownMs();
         const timeSinceLast = Date.now() - lastOutboundAt;
         if (timeSinceLast < cooldownMs) {
-          trace.debug({ event: 'send_cooldown_active', pipelineContext }, 'send_cooldown_active');
+          trace.info(
+            {
+              event: 'send_cooldown_active',
+              pipelineContext,
+              timeSinceLast,
+              cooldownMs,
+              phoneDigits: phone,
+            },
+            'send blocked by cooldown',
+          );
           return { ok: false, skipped: 'cooldown' };
         }
       }
@@ -234,6 +243,7 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
       greenInstanceDbId,
       phone: phoneDigits,
       pipelineContext: 'campaign',
+      firstMessage: true,
       messageCount: 0,
       lastMessageAt: priorState?.lastOutboundAt,
       campaignId,
