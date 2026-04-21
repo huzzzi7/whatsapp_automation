@@ -100,11 +100,9 @@ async function safeSend(chatId, message, greenApi, context = {}) {
       chatId,
       phoneDigits: phone ? String(phone).replace(/\D/g, '') : undefined,
     });
-    // Phase 1.5 fix: reply-triggered sends use shorter cooldown for human-paced conversations;
-    // campaign context keeps full MESSAGE_COOLDOWN_MS (burst protection).
+    // Cooldown (MESSAGE_COOLDOWN_MS) applies only to campaign sends — reply/intent/sequence are not blocked
+    // by lastOutboundAt so users get immediate follow-ups when they reply quickly.
     const pipelineContext = context.pipelineContext || 'reply';
-    const isReplyContext = pipelineContext === 'reply' || pipelineContext === 'sequence';
-    const cooldownMs = isReplyContext ? getReplyContextCooldownMs() : getMessageCooldownMs();
     if (store && greenInstanceDbId && phone) {
       const possibleKeys = [String(phone || '').replace(/\D/g, ''), String(phone || '').replace(/\D/g, '').replace(/^0+/, '')];
       const uniqueKeys = [...new Set(possibleKeys.filter((k) => k && k.length > 0))];
@@ -114,7 +112,8 @@ async function safeSend(chatId, message, greenApi, context = {}) {
         if (currentState) break;
       }
       const lastOutboundAt = Number(currentState?.lastOutboundAt);
-      if (Number.isFinite(lastOutboundAt)) {
+      if (pipelineContext === 'campaign' && Number.isFinite(lastOutboundAt)) {
+        const cooldownMs = getMessageCooldownMs();
         const timeSinceLast = Date.now() - lastOutboundAt;
         if (timeSinceLast < cooldownMs) {
           trace.debug({ event: 'send_cooldown_active', pipelineContext }, 'send_cooldown_active');
@@ -245,6 +244,7 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
         sequence,
         campaignId,
         lastOutboundAt: Date.now(),
+        status: 'active',
       });
       startedUsers += 1;
       sentPhoneDigits.push(phoneDigits);
@@ -341,6 +341,10 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
       userState = cleared;
       trace.info({ event: 'user_resumed_active' }, 'Resumed active after restart phrase or non-opt-out intent');
     } else {
+      trace.info(
+        { event: 'reply_blocked_user_stopped', status: statusNorm, inboundText: incomingText },
+        'reply blocked: user stopped, no restart phrase',
+      );
       trace.debug({ event: 'skipped_user_stopped_opt_out' }, 'skipped user_stopped_opt_out');
       return;
     }
@@ -349,6 +353,10 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
   trace.debug({ event: 'state_found', lastSentIndex: userState.lastSentIndex }, 'State found');
   const sequence = userState.sequence;
   if (!sequence || sequence.length < 1) {
+    trace.info(
+      { event: 'reply_blocked_empty_sequence', lastSentIndex: userState.lastSentIndex },
+      'reply blocked: sequence empty or missing in state',
+    );
     store.deleteState(greenInstanceDbId, normalized);
     return;
   }
