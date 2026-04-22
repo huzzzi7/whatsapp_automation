@@ -2,7 +2,7 @@
  * BullMQ queue singletons (one instance per process).
  */
 const { Queue } = require('bullmq');
-const { connectionString, bullMqSkipVersionCheck } = require('./connection');
+const { bullMqConnection, bullMqSkipVersionCheck } = require('./connection');
 const { createLogger } = require('../utils/logger');
 
 const qlog = createLogger('worker');
@@ -15,7 +15,7 @@ const defaultJobOptions = {
 };
 
 const queueOpts = {
-  connection: connectionString,
+  connection: bullMqConnection,
   defaultJobOptions,
   skipVersionCheck: bullMqSkipVersionCheck,
 };

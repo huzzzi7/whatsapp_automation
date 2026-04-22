@@ -4,7 +4,7 @@
  * Task 3.3 — replaces Phase C inline execution in enqueueMessage.js
  */
 const { Worker, DelayedError } = require('bullmq');
-const { connectionString, bullMqSkipVersionCheck } = require('./connection');
+const { bullMqConnection, bullMqSkipVersionCheck, maskRedisHostForLog } = require('./connection');
 const { controlledSend } = require('../services/controlledSend');
 const {
   getGreenQueueDepth,
@@ -17,6 +17,9 @@ const { getLocalQueueDepth, getLocalQueueMax } = require('../services/localQueue
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('worker');
+
+// Cached singleton queues (server must load ./queues/index before this module, as in server.js).
+const { messageQueue, replyQueue } = require('./index');
 
 async function processMessageJob(job, token) {
   const {
@@ -153,17 +156,27 @@ async function processMessageJob(job, token) {
   return result;
 }
 
-const messageWorker = new Worker('messageQueue', processMessageJob, {
-  connection: connectionString,
-  concurrency: 1,
-  skipVersionCheck: bullMqSkipVersionCheck,
-});
+let messageWorker;
+let replyWorker;
+try {
+  messageWorker = new Worker('messageQueue', processMessageJob, {
+    connection: bullMqConnection,
+    concurrency: 1,
+    skipVersionCheck: bullMqSkipVersionCheck,
+  });
 
-const replyWorker = new Worker('replyQueue', processMessageJob, {
-  connection: connectionString,
-  concurrency: 1,
-  skipVersionCheck: bullMqSkipVersionCheck,
-});
+  replyWorker = new Worker('replyQueue', processMessageJob, {
+    connection: bullMqConnection,
+    concurrency: 1,
+    skipVersionCheck: bullMqSkipVersionCheck,
+  });
+} catch (err) {
+  log.error(
+    { err: err?.message || String(err), event: 'bullmq_worker_failed_to_start' },
+    'bullmq_worker_failed_to_start',
+  );
+  process.exit(1);
+}
 
 messageWorker.on('error', (err) => log.error({ err: err.message, queue: 'messageQueue' }, 'Worker messageQueue error'));
 replyWorker.on('error', (err) => log.error({ err: err.message, queue: 'replyQueue' }, 'Worker replyQueue error'));
@@ -176,6 +189,76 @@ replyWorker.on('failed', (job, err) =>
 );
 
 log.info({ event: 'workers_started', concurrency: 1 }, 'messageWorker and replyWorker started');
+
+const STARTUP_REDIS_TIMEOUT_MS = 30000;
+
+function verifyWorkersAndLogHealth() {
+  return (async () => {
+    const tryClient = (w, queueName) =>
+      Promise.race([
+        w.client,
+        new Promise((_, rej) => {
+          setTimeout(() => rej(new Error('redis_client_timeout')), STARTUP_REDIS_TIMEOUT_MS);
+        }),
+      ]).then(() => queueName);
+
+    try {
+      await Promise.all([tryClient(messageWorker, 'messageQueue'), tryClient(replyWorker, 'replyQueue')]);
+    } catch (err) {
+      log.error(
+        { err: err?.message || String(err), event: 'bullmq_worker_failed_to_start' },
+        'bullmq_worker_failed_to_start',
+      );
+      process.exit(1);
+    }
+
+    const redisHostMasked = maskRedisHostForLog(bullMqConnection.url);
+
+    log.info(
+      {
+        event: 'bullmq_worker_alive',
+        processPid: process.pid,
+        queue: 'messageQueue',
+        redisHost: redisHostMasked,
+        concurrency: 1,
+      },
+      'bullmq_worker_alive',
+    );
+    log.info(
+      {
+        event: 'bullmq_worker_alive',
+        processPid: process.pid,
+        queue: 'replyQueue',
+        redisHost: redisHostMasked,
+        concurrency: 1,
+      },
+      'bullmq_worker_alive',
+    );
+
+    const [msgCounts, replyCounts] = await Promise.all([
+      messageQueue.getJobCounts('wait', 'active', 'delayed', 'failed', 'completed', 'paused'),
+      replyQueue.getJobCounts('wait', 'active', 'delayed', 'failed', 'completed', 'paused'),
+    ]);
+
+    log.info(
+      {
+        event: 'bullmq_queue_snapshot',
+        processPid: process.pid,
+        messageQueue: msgCounts,
+        replyQueue: replyCounts,
+      },
+      'bullmq_queue_snapshot',
+    );
+  })();
+}
+
+verifyWorkersAndLogHealth().catch((err) => {
+  log.error(
+    { err: err?.message || String(err), event: 'bullmq_worker_failed_to_start' },
+    'bullmq_worker_failed_to_start',
+  );
+  process.exit(1);
+});
 
 async function closeWorkers() {
   await Promise.all([messageWorker.close(), replyWorker.close()]);

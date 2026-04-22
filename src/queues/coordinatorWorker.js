@@ -4,7 +4,7 @@
  * Task 3.4
  */
 const { Worker } = require('bullmq');
-const { connectionString, bullMqSkipVersionCheck } = require('./connection');
+const { bullMqConnection, bullMqSkipVersionCheck } = require('./connection');
 const { tryRunNext } = require('../services/CampaignCoordinator');
 const { createLogger } = require('../utils/logger');
 
@@ -22,7 +22,7 @@ async function processCoordinatorTick(job) {
 }
 
 const coordinatorWorker = new Worker('followupQueue', processCoordinatorTick, {
-  connection: connectionString,
+  connection: bullMqConnection,
   concurrency: 1,
   skipVersionCheck: bullMqSkipVersionCheck,
 });

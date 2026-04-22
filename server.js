@@ -1466,9 +1466,8 @@ app.listen(PORT, '0.0.0.0', () => {
   } catch (err) {
     logger.error({ err: err.message, event: 'state_load_error' }, 'State load error');
   }
-  // Task 3.3 — BullMQ workers (module already loaded for closeWorkers; ensure module evaluated)
-  require('./src/queues/messageWorker');
-  logger.info({ event: 'bullmq_workers_started' }, 'BullMQ message workers started');
+  // messageWorker is required at file top (with closeWorkers); do not re-require here.
+  logger.info({ event: 'bullmq_workers_start_confirmed' }, 'BullMQ message workers bound at process start');
   // Task 3.4 — BullMQ coordinator replaces setInterval
   require('./src/queues/coordinatorWorker');
   registerCoordinatorJob().catch((err) =>
