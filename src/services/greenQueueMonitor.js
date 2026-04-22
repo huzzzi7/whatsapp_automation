@@ -12,6 +12,11 @@ const { connectionString, connectionOptions } = require('../queues/connection');
 /** @type {Map<string, { depth: number, fetchedAt: number }>} */
 const depthCache = new Map();
 
+/** @type {Map<string, { paused: boolean, fetchedAt: number }>} */
+const pauseFlagCache = new Map();
+
+const PAUSE_FLAG_CACHE_TTL_MS = 1000;
+
 let _redis = null;
 function getRedisClient() {
   if (!_redis) {
@@ -96,22 +101,33 @@ function clearDepthCache(instanceId) {
 }
 
 async function setPauseFlag(instanceId) {
+  const id = String(instanceId || '').trim();
   try {
     const redis = getRedisClient();
-    const key = `bullmq:pause:green:${instanceId}`;
+    const key = `bullmq:pause:green:${id}`;
     await redis.set(key, '1', 'EX', 35);
-    console.warn(`[GreenQueueMonitor] HARD PAUSE set for instanceId=${instanceId} (TTL 35s)`);
+    pauseFlagCache.set(id, { paused: true, fetchedAt: Date.now() });
+    console.warn(`[GreenQueueMonitor] HARD PAUSE set for instanceId=${id} (TTL 35s)`);
   } catch (err) {
     console.error('[GreenQueueMonitor] Failed to set pause flag:', err.message);
   }
 }
 
 async function isPaused(instanceId) {
+  const id = String(instanceId || '').trim();
+  if (!id) return false;
+  const now = Date.now();
+  const hit = pauseFlagCache.get(id);
+  if (hit && now - hit.fetchedAt < PAUSE_FLAG_CACHE_TTL_MS) {
+    return hit.paused;
+  }
   try {
     const redis = getRedisClient();
-    const key = `bullmq:pause:green:${instanceId}`;
+    const key = `bullmq:pause:green:${id}`;
     const val = await redis.get(key);
-    return val === '1';
+    const paused = val === '1';
+    pauseFlagCache.set(id, { paused, fetchedAt: now });
+    return paused;
   } catch (err) {
     console.error('[GreenQueueMonitor] Failed to check pause flag:', err.message);
     return false;
@@ -119,11 +135,13 @@ async function isPaused(instanceId) {
 }
 
 async function clearPauseFlag(instanceId) {
+  const id = String(instanceId || '').trim();
   try {
     const redis = getRedisClient();
-    const key = `bullmq:pause:green:${instanceId}`;
+    const key = `bullmq:pause:green:${id}`;
     await redis.del(key);
-    console.log(`[GreenQueueMonitor] Pause flag cleared for instanceId=${instanceId}`);
+    pauseFlagCache.set(id, { paused: false, fetchedAt: Date.now() });
+    console.log(`[GreenQueueMonitor] Pause flag cleared for instanceId=${id}`);
   } catch (err) {
     console.error('[GreenQueueMonitor] Failed to clear pause flag:', err.message);
   }

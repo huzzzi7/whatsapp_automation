@@ -14,8 +14,8 @@ async function enqueueMessage(payload, queueTarget = 'message') {
   const jobId = `${payload.greenInstanceDbId || 'x'}-${payload.phoneDigits || payload.chatId}-${payload.messageCount ?? 0}-${Date.now()}`;
   const jobOptions = {
     jobId,
-    removeOnComplete: { count: 100 },
-    removeOnFail: { count: 500 },
+    removeOnComplete: { count: 20 },
+    removeOnFail: { count: 50 },
     attempts: 3,
     backoff: { type: 'exponential', delay: 5000 },
   };

@@ -8,8 +8,8 @@ const { createLogger } = require('../utils/logger');
 const qlog = createLogger('worker');
 
 const defaultJobOptions = {
-  removeOnComplete: { count: 100 },
-  removeOnFail: { count: 500 },
+  removeOnComplete: { count: 20 },
+  removeOnFail: { count: 50 },
   attempts: 3,
   backoff: { type: 'exponential', delay: 5000 },
 };

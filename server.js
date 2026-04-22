@@ -454,6 +454,60 @@ app.delete('/api/users/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// POST /api/admin/retry-redis-failed — reset contacts failed by Upstash Redis command limits (requireAuth + requireAdmin)
+app.post('/api/admin/retry-redis-failed', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const campaignId =
+      body.campaignId != null && String(body.campaignId).trim() !== '' ? String(body.campaignId).trim() : null;
+    const likePattern = '%max requests limit%';
+
+    if (campaignId) {
+      const [r] = await pool.execute(
+        `UPDATE campaign_contacts
+         SET first_send_status = 'pending', last_error = NULL, attempt_count = 0
+         WHERE first_send_status = 'failed'
+           AND last_error LIKE ?
+           AND campaign_id = ?`,
+        [likePattern, campaignId],
+      );
+      const contactsReset = Number(r.affectedRows) || 0;
+      const [cr] = await pool.execute(
+        `UPDATE campaigns
+         SET status = 'queued', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND status = 'failed'`,
+        [campaignId],
+      );
+      const campaignsReset = Number(cr.affectedRows) || 0;
+      logger.info(
+        { event: 'retry_redis_failed', campaignId, contactsReset, campaignsReset },
+        'retry-redis-failed: contacts reset to pending',
+      );
+      tryRunNext().catch((err) =>
+        logger.error({ err: err.message, event: 'retry_redis_failed_tryRunNext' }, 'tryRunNext after retry-redis-failed'),
+      );
+      return res.json({ ok: true, contactsReset, campaignsReset, campaignId });
+    }
+
+    const [r] = await pool.execute(
+      `UPDATE campaign_contacts
+       SET first_send_status = 'pending', last_error = NULL, attempt_count = 0
+       WHERE first_send_status = 'failed'
+         AND last_error LIKE ?`,
+      [likePattern],
+    );
+    const contactsReset = Number(r.affectedRows) || 0;
+    logger.info({ event: 'retry_redis_failed', contactsReset, campaignId: null }, 'retry-redis-failed: all matching contacts reset');
+    tryRunNext().catch((err) =>
+      logger.error({ err: err.message, event: 'retry_redis_failed_tryRunNext' }, 'tryRunNext after retry-redis-failed'),
+    );
+    return res.json({ ok: true, contactsReset, campaignsReset: 0, campaignId: null });
+  } catch (err) {
+    logger.error({ err: err.message, event: 'retry_redis_failed_error' }, 'retry-redis-failed failed');
+    res.status(500).json({ ok: false, error: err.message || 'Retry failed.' });
+  }
+});
+
 // GET /api/campaign/templates – default {{university}} / {{link}} / {{group}} template strings for dashboard modal
 app.get('/api/campaign/templates', (req, res) => {
   res.json({ templates: defaultTemplateStrings() });
@@ -1473,7 +1527,10 @@ app.listen(PORT, '0.0.0.0', () => {
   registerCoordinatorJob().catch((err) =>
     logger.error({ err: err.message, event: 'coordinator_register_failed' }, 'Failed to register coordinator job'),
   );
-  logger.info({ event: 'bullmq_coordinator_registered' }, 'BullMQ coordinator tick registered (every 3000ms)');
+  logger.info(
+    { event: 'bullmq_coordinator_registered', coordinatorTickMs: parseInt(process.env.COORDINATOR_TICK_MS || '15000', 10) || 15000 },
+    'BullMQ coordinator tick registered (see COORDINATOR_TICK_MS)',
+  );
 });
 
 process.on('SIGTERM', async () => {
