@@ -1,115 +1,280 @@
-CREATE TABLE users (
-  id VARCHAR(50) PRIMARY KEY,
-  name VARCHAR(255) DEFAULT '',
-  email VARCHAR(255) UNIQUE,
-  passwordHash VARCHAR(255),
-  role VARCHAR(50) DEFAULT 'USER',
-  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-);
+-- phpMyAdmin SQL Dump
+-- version 5.2.3
+-- https://www.phpmyadmin.net/
+--
+-- Host: localhost
+-- Generation Time: Apr 24, 2026 at 04:20 AM
+-- Server version: 8.0.30
+-- PHP Version: 8.3.28
 
-CREATE TABLE green_instances (
-  id VARCHAR(50) PRIMARY KEY,
-  name VARCHAR(255),
-  phoneNumber VARCHAR(50),
-  greenInstanceId VARCHAR(100),
-  apiToken VARCHAR(255),
-  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
+START TRANSACTION;
+SET time_zone = "+00:00";
 
-CREATE TABLE campaign_logs (
-  id VARCHAR(50) PRIMARY KEY,
-  clientCampaignId VARCHAR(255),
-  totalUsers INT,
-  totalUniversities INT,
-  universityStats TEXT,
-  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-);
 
--- Persistent campaign queue / execution (references green_instances.id at application level; no schema change to green_instances)
-CREATE TABLE campaigns (
-  id CHAR(36) NOT NULL PRIMARY KEY,
-  green_instance_id CHAR(36) NOT NULL,
-  name VARCHAR(255) NULL,
-  status VARCHAR(20) NOT NULL,
-  queue_order INT NOT NULL,
-  total_contacts INT NOT NULL DEFAULT 0,
-  sent_count INT NOT NULL DEFAULT 0,
-  failed_or_skipped_count INT NOT NULL DEFAULT 0,
-  failed_count INT NOT NULL DEFAULT 0,
-  skipped_count INT NOT NULL DEFAULT 0,
-  batch_size INT NULL,
-  delay_seconds INT NULL,
-  message_delay_seconds INT NULL,
-  error_message TEXT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  started_at TIMESTAMP NULL DEFAULT NULL,
-  completed_at TIMESTAMP NULL DEFAULT NULL,
-  scheduled_at TIMESTAMP NULL DEFAULT NULL
+/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
+/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
+/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
+/*!40101 SET NAMES utf8mb4 */;
+
+--
+-- Database: `whatsapp`
+--
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `campaigns`
+--
+
+CREATE TABLE `campaigns` (
+  `id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `green_instance_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `name` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `queue_order` int NOT NULL,
+  `total_contacts` int NOT NULL DEFAULT '0',
+  `sent_count` int NOT NULL DEFAULT '0',
+  `failed_or_skipped_count` int NOT NULL DEFAULT '0',
+  `failed_count` int NOT NULL DEFAULT '0',
+  `skipped_count` int NOT NULL DEFAULT '0',
+  `batch_size` int DEFAULT NULL,
+  `delay_seconds` int DEFAULT NULL,
+  `message_delay_seconds` int DEFAULT NULL,
+  `error_message` text COLLATE utf8mb4_unicode_ci,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `started_at` timestamp NULL DEFAULT NULL,
+  `completed_at` timestamp NULL DEFAULT NULL,
+  `scheduled_at` timestamp NULL DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE campaign_contacts (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  campaign_id CHAR(36) NOT NULL,
-  phone_normalized VARCHAR(20) NOT NULL,
-  payload_json LONGTEXT NULL,
-  sort_order INT NOT NULL,
-  first_send_status VARCHAR(20) NOT NULL DEFAULT 'pending',
-  attempt_count INT NOT NULL DEFAULT 0,
-  last_error TEXT NULL,
-  sent_at TIMESTAMP NULL DEFAULT NULL,
-  UNIQUE KEY uk_campaign_contacts_campaign_phone (campaign_id, phone_normalized),
-  KEY idx_campaign_contacts_campaign_status_sort (campaign_id, first_send_status, sort_order),
-  CONSTRAINT fk_campaign_contacts_campaign
-    FOREIGN KEY (campaign_id) REFERENCES campaigns (id) ON DELETE CASCADE
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `campaign_contacts`
+--
+
+CREATE TABLE `campaign_contacts` (
+  `id` bigint UNSIGNED NOT NULL,
+  `campaign_id` char(36) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `phone_normalized` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `payload_json` longtext COLLATE utf8mb4_unicode_ci,
+  `sort_order` int NOT NULL,
+  `first_send_status` varchar(20) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',
+  `attempt_count` int NOT NULL DEFAULT '0',
+  `last_error` text COLLATE utf8mb4_unicode_ci,
+  `sent_at` timestamp NULL DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- express-mysql-session (not auto-created by default)
-CREATE TABLE IF NOT EXISTS sessions (
-  session_id varchar(128) COLLATE utf8mb4_bin NOT NULL,
-  expires int unsigned NOT NULL,
-  data mediumtext COLLATE utf8mb4_bin,
-  PRIMARY KEY (session_id)
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `campaign_logs`
+--
+
+CREATE TABLE `campaign_logs` (
+  `id` varchar(50) NOT NULL,
+  `clientCampaignId` varchar(255) DEFAULT NULL,
+  `totalUsers` int DEFAULT NULL,
+  `totalUniversities` int DEFAULT NULL,
+  `universityStats` text,
+  `createdAt` datetime DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `conversation_state`
+--
+
+CREATE TABLE `conversation_state` (
+  `id` bigint NOT NULL,
+  `green_instance_db_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `phone_normalized` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `last_sent_index` int NOT NULL,
+  `campaign_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `sequence_json` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  `updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  `status` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL
+) ;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `green_instances`
+--
+
+CREATE TABLE `green_instances` (
+  `id` varchar(50) NOT NULL,
+  `name` varchar(255) DEFAULT NULL,
+  `phoneNumber` varchar(50) DEFAULT NULL,
+  `greenInstanceId` varchar(100) DEFAULT NULL,
+  `apiToken` varchar(255) DEFAULT NULL,
+  `createdAt` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updatedAt` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--
+-- Dumping data for table `green_instances`
+--
+
+INSERT INTO `green_instances` (`id`, `name`, `phoneNumber`, `greenInstanceId`, `apiToken`, `createdAt`, `updatedAt`) VALUES
+('39beb75f-3ab3-4e1f-ba73-17241eacf69c', 'Jonny', '03123456789', '7107546745', 'fb8a5e351881464dae6e54c9542b2344fc9bfdd3c30e4d43a6', '2026-04-03 01:01:33', '2026-04-03 01:01:33'),
+('bd582dfa-1ca3-469d-9c65-236a3d884203', 'bot 1', '447585900418', '7107580490', 'fdf9fdab723140d698aaea9d942b34f4c56d63874fd74e869c', '2026-04-08 12:26:42', '2026-04-08 12:26:42'),
+('e3da677b-f023-487e-9883-0e9e366ee2c1', 'cammy', '447348542981', '7107583124', '5f1d48bfb6da454d83f7d3b6e76237aff63dca2471d342df89', '2026-04-10 08:23:50', '2026-04-15 09:55:33');
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `incoming_messages_log`
+--
+
+CREATE TABLE `incoming_messages_log` (
+  `id` bigint NOT NULL,
+  `green_instance_db_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `provider_message_id` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `type_webhook` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `phone_normalized` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `dedupe_key` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
+  `received_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `sessions`
+--
+
+CREATE TABLE `sessions` (
+  `session_id` varchar(128) COLLATE utf8mb4_bin NOT NULL,
+  `expires` int UNSIGNED NOT NULL,
+  `data` mediumtext COLLATE utf8mb4_bin
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
 
--- Existing DBs: add split counters (failed_or_skipped_count retained for legacy reads only)
--- ALTER TABLE campaigns ADD COLUMN failed_count INT NOT NULL DEFAULT 0;
--- ALTER TABLE campaigns ADD COLUMN skipped_count INT NOT NULL DEFAULT 0;
--- ALTER TABLE campaigns ADD COLUMN scheduled_at TIMESTAMP NULL DEFAULT NULL;
+--
+-- Dumping data for table `sessions`
+--
 
--- Webhook idempotency (one row per inbound message per instance)
-CREATE TABLE IF NOT EXISTS incoming_messages_log (
-  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  green_instance_db_id VARCHAR(64) NOT NULL,
-  provider_message_id VARCHAR(255) NOT NULL,
-  type_webhook VARCHAR(64) NOT NULL,
-  phone_normalized VARCHAR(32) NULL,
-  dedupe_key VARCHAR(255) NOT NULL,
-  received_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  UNIQUE KEY uniq_msg (green_instance_db_id, provider_message_id, type_webhook),
-  UNIQUE KEY uniq_dedupe (dedupe_key),
-  KEY idx_incoming_messages_instance_received (green_instance_db_id, received_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+INSERT INTO `sessions` (`session_id`, `expires`, `data`) VALUES
+('BO2NSka9JhvhKjAjFwPK5JXwKzmngtmJ', 1776914883, '{\"cookie\":{\"originalMaxAge\":86400000,\"expires\":\"2026-04-22T04:08:30.642Z\",\"secure\":false,\"httpOnly\":true,\"path\":\"/\",\"sameSite\":\"lax\"},\"user\":{\"id\":\"8340ba3c-e036-4c44-93a4-d1169427afe4\",\"email\":\"jonny@ultimatefreshersevents.com\",\"role\":\"ADMIN\"}}');
 
--- If upgrading an older DB without dedupe_key: run `node scripts/ensure-core-tables.js` (applies migration), or:
--- ALTER TABLE incoming_messages_log ADD COLUMN dedupe_key VARCHAR(255) NULL;
--- UPDATE incoming_messages_log SET dedupe_key = CONCAT('migrated-', LPAD(id, 20, '0')) WHERE dedupe_key IS NULL;
--- ALTER TABLE incoming_messages_log MODIFY dedupe_key VARCHAR(255) NOT NULL;
--- ALTER TABLE incoming_messages_log ADD UNIQUE KEY uniq_dedupe (dedupe_key);
+-- --------------------------------------------------------
 
--- Production conversation state (dual-write with conversation-state.json during migration)
-CREATE TABLE IF NOT EXISTS conversation_state (
-  id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  green_instance_db_id VARCHAR(64) NOT NULL,
-  phone_normalized VARCHAR(32) NOT NULL,
-  last_sent_index INT NOT NULL,
-  campaign_id VARCHAR(255) NULL,
-  sequence_json JSON NOT NULL,
-  status VARCHAR(32) NULL,
-  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  UNIQUE KEY uniq_state (green_instance_db_id, phone_normalized),
-  KEY idx_conversation_state_updated (green_instance_db_id, updated_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+--
+-- Table structure for table `users`
+--
 
--- Existing DBs: ALTER TABLE conversation_state ADD COLUMN status VARCHAR(32) NULL;
+CREATE TABLE `users` (
+  `id` varchar(50) NOT NULL,
+  `name` varchar(255) DEFAULT '',
+  `email` varchar(255) DEFAULT NULL,
+  `passwordHash` varchar(255) DEFAULT NULL,
+  `role` varchar(50) DEFAULT 'USER',
+  `createdAt` datetime DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+--
+-- Dumping data for table `users`
+--
+
+INSERT INTO `users` (`id`, `name`, `email`, `passwordHash`, `role`, `createdAt`) VALUES
+('7ec507a6-97e3-41c1-aabb-5909397cc8c9', 'Bot 2', 'jonny@fresherswelcomeweek.com', '$2b$10$wOVwDGvzkX0OBey368KoTeqZGFnPGyo8RJSodUGckJLFPlKG6W/rK', 'ADMIN', '2026-04-08 11:14:37'),
+('8340ba3c-e036-4c44-93a4-d1169427afe4', 'Jonny', 'jonny@ultimatefreshersevents.com', '$2b$10$as.GxUOv..vrBdMBC7MDmu2JjQalHQQe/pDe1xqvSPbdpL0NWUd7W', 'ADMIN', '2026-03-25 04:57:07');
+
+--
+-- Indexes for dumped tables
+--
+
+--
+-- Indexes for table `campaigns`
+--
+ALTER TABLE `campaigns`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- Indexes for table `campaign_contacts`
+--
+ALTER TABLE `campaign_contacts`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uk_campaign_contacts_campaign_phone` (`campaign_id`,`phone_normalized`),
+  ADD KEY `idx_campaign_contacts_campaign_status_sort` (`campaign_id`,`first_send_status`,`sort_order`);
+
+--
+-- Indexes for table `campaign_logs`
+--
+ALTER TABLE `campaign_logs`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- Indexes for table `conversation_state`
+--
+ALTER TABLE `conversation_state`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_state` (`green_instance_db_id`,`phone_normalized`),
+  ADD KEY `idx_conversation_state_updated` (`green_instance_db_id`,`updated_at`);
+
+--
+-- Indexes for table `green_instances`
+--
+ALTER TABLE `green_instances`
+  ADD PRIMARY KEY (`id`);
+
+--
+-- Indexes for table `incoming_messages_log`
+--
+ALTER TABLE `incoming_messages_log`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_msg` (`green_instance_db_id`,`provider_message_id`,`type_webhook`),
+  ADD UNIQUE KEY `uniq_dedupe` (`dedupe_key`),
+  ADD KEY `idx_incoming_messages_instance_received` (`green_instance_db_id`,`received_at`);
+
+--
+-- Indexes for table `sessions`
+--
+ALTER TABLE `sessions`
+  ADD PRIMARY KEY (`session_id`);
+
+--
+-- Indexes for table `users`
+--
+ALTER TABLE `users`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `email` (`email`);
+
+--
+-- AUTO_INCREMENT for dumped tables
+--
+
+--
+-- AUTO_INCREMENT for table `campaign_contacts`
+--
+ALTER TABLE `campaign_contacts`
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `conversation_state`
+--
+ALTER TABLE `conversation_state`
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT for table `incoming_messages_log`
+--
+ALTER TABLE `incoming_messages_log`
+  MODIFY `id` bigint NOT NULL AUTO_INCREMENT;
+
+--
+-- Constraints for dumped tables
+--
+
+--
+-- Constraints for table `campaign_contacts`
+--
+ALTER TABLE `campaign_contacts`
+  ADD CONSTRAINT `fk_campaign_contacts_campaign` FOREIGN KEY (`campaign_id`) REFERENCES `campaigns` (`id`) ON DELETE CASCADE;
+COMMIT;
+
+/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
+/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
+/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
