@@ -71,7 +71,7 @@ if (!isSupportedNode) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
-const cookieSecure = process.env.SESSION_COOKIE_SECURE === 'true' || isProduction;
+const cookieSecure = process.env.SESSION_COOKIE_SECURE === 'true';
 const sameSite = (process.env.SESSION_COOKIE_SAMESITE || 'lax').toLowerCase();
 
 const sessionStore = new MySQLStore({
