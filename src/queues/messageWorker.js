@@ -148,6 +148,36 @@ async function processMessageJob(job, token) {
   }
 
   if (result.skipped) {
+    const ctx = String(context || '').trim().toLowerCase();
+    if (ctx === 'reply') {
+      const prior = Math.floor(Number(job.data?.pipelineSkipRetries || 0));
+      const retries = Number.isFinite(prior) && prior >= 0 ? prior : 0;
+      const nextRetry = retries + 1;
+      const delayMs = 90_000;
+
+      if (retries >= 3) {
+        jobLog.warn(
+          { event: 'reply_pipeline_skip_dropped', context: ctx, retryCount: retries },
+          'Reply pipeline skip retries exceeded; dropping job',
+        );
+      } else {
+        const payload = { ...job.data, pipelineSkipRetries: nextRetry };
+        // Requeue same send payload with a delay so the sequence can continue without needing another inbound reply.
+        await replyQueue.add('send_message', payload, {
+          delay: delayMs,
+          removeOnComplete: { count: 20 },
+          removeOnFail: { count: 50 },
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          jobId: `${String(job.id)}-pipeline-skip-${nextRetry}-${Date.now()}`,
+        });
+        jobLog.info(
+          { event: 'reply_pipeline_skip_requeued', retryCount: nextRetry, delayMs, context: ctx },
+          'Reply pipeline skip requeued',
+        );
+      }
+    }
+
     jobLog.debug({ event: 'worker_job_skipped', context }, 'worker_job_skipped');
   } else {
     jobLog.debug({ event: 'worker_job_complete', delayMs: result.delay, context }, 'worker_job_complete');
