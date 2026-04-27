@@ -22,6 +22,12 @@ function mapRow(row) {
   if (row.status != null && String(row.status).trim() !== '') {
     out.status = String(row.status).trim();
   }
+  // Phase 6 — follow-up metadata (all optional for backward compatibility)
+  out.lastOutboundAt = row.last_outbound_at ? new Date(row.last_outbound_at).getTime() : null;
+  out.lastInboundAt = row.last_inbound_at ? new Date(row.last_inbound_at).getTime() : null;
+  out.followupStep = row.followup_step ?? 0;
+  out.followupNextAt = row.followup_next_at ? new Date(row.followup_next_at).getTime() : null;
+  out.followupCancelled = Boolean(row.followup_cancelled);
   return out;
 }
 
@@ -34,7 +40,8 @@ async function getState(instanceId, phone) {
   const p = String(phone || '').trim();
   if (!gid || !p) return null;
   const [rows] = await pool.execute(
-    `SELECT last_sent_index, campaign_id, sequence_json, status
+    `SELECT last_sent_index, campaign_id, sequence_json, status,
+            last_outbound_at, last_inbound_at, followup_step, followup_next_at, followup_cancelled
      FROM conversation_state
      WHERE green_instance_db_id = ? AND phone_normalized = ?
      LIMIT 1`,
@@ -63,7 +70,108 @@ async function upsertState(instanceId, phone, data) {
       : null
     : null;
 
-  if (hasStatusKey) {
+  const hasLastOutboundAt = Object.prototype.hasOwnProperty.call(data, 'lastOutboundAt');
+  const hasLastInboundAt = Object.prototype.hasOwnProperty.call(data, 'lastInboundAt');
+  const hasFollowupStep = Object.prototype.hasOwnProperty.call(data, 'followupStep');
+  const hasFollowupNextAt = Object.prototype.hasOwnProperty.call(data, 'followupNextAt');
+  const hasFollowupCancelled = Object.prototype.hasOwnProperty.call(data, 'followupCancelled');
+  const hasFollowupMeta =
+    hasLastOutboundAt || hasLastInboundAt || hasFollowupStep || hasFollowupNextAt || hasFollowupCancelled;
+
+  const lastOutboundAt =
+    hasLastOutboundAt && data.lastOutboundAt != null && Number.isFinite(Number(data.lastOutboundAt))
+      ? new Date(Number(data.lastOutboundAt))
+      : null;
+  const lastInboundAt =
+    hasLastInboundAt && data.lastInboundAt != null && Number.isFinite(Number(data.lastInboundAt))
+      ? new Date(Number(data.lastInboundAt))
+      : null;
+  const followupStep =
+    hasFollowupStep && Number.isFinite(Number(data.followupStep)) ? Math.max(0, Math.floor(Number(data.followupStep))) : 0;
+  const followupNextAt =
+    hasFollowupNextAt && data.followupNextAt != null && Number.isFinite(Number(data.followupNextAt))
+      ? new Date(Number(data.followupNextAt))
+      : null;
+  const followupCancelled =
+    hasFollowupCancelled ? (data.followupCancelled ? 1 : 0) : 0;
+
+  if (hasStatusKey && hasFollowupMeta) {
+    await pool.execute(
+      `INSERT INTO conversation_state (
+        green_instance_db_id,
+        phone_normalized,
+        last_sent_index,
+        campaign_id,
+        sequence_json,
+        status,
+        last_outbound_at,
+        last_inbound_at,
+        followup_step,
+        followup_next_at,
+        followup_cancelled
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        last_sent_index = VALUES(last_sent_index),
+        campaign_id = VALUES(campaign_id),
+        sequence_json = VALUES(sequence_json),
+        status = VALUES(status),
+        last_outbound_at = VALUES(last_outbound_at),
+        last_inbound_at = VALUES(last_inbound_at),
+        followup_step = VALUES(followup_step),
+        followup_next_at = VALUES(followup_next_at),
+        followup_cancelled = VALUES(followup_cancelled)`,
+      [
+        gid,
+        p,
+        lastSent,
+        campaignId,
+        JSON.stringify(seq),
+        status,
+        lastOutboundAt,
+        lastInboundAt,
+        followupStep,
+        followupNextAt,
+        followupCancelled,
+      ],
+    );
+  } else if (!hasStatusKey && hasFollowupMeta) {
+    await pool.execute(
+      `INSERT INTO conversation_state (
+        green_instance_db_id,
+        phone_normalized,
+        last_sent_index,
+        campaign_id,
+        sequence_json,
+        status,
+        last_outbound_at,
+        last_inbound_at,
+        followup_step,
+        followup_next_at,
+        followup_cancelled
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        last_sent_index = VALUES(last_sent_index),
+        campaign_id = VALUES(campaign_id),
+        sequence_json = VALUES(sequence_json),
+        last_outbound_at = VALUES(last_outbound_at),
+        last_inbound_at = VALUES(last_inbound_at),
+        followup_step = VALUES(followup_step),
+        followup_next_at = VALUES(followup_next_at),
+        followup_cancelled = VALUES(followup_cancelled)`,
+      [
+        gid,
+        p,
+        lastSent,
+        campaignId,
+        JSON.stringify(seq),
+        lastOutboundAt,
+        lastInboundAt,
+        followupStep,
+        followupNextAt,
+        followupCancelled,
+      ],
+    );
+  } else if (hasStatusKey) {
     await pool.execute(
       `INSERT INTO conversation_state (
         green_instance_db_id,
@@ -97,6 +205,71 @@ async function upsertState(instanceId, phone, data) {
       [gid, p, lastSent, campaignId, JSON.stringify(seq)],
     );
   }
+}
+
+async function updateOutboundMeta(greenInstanceDbId, phoneNormalized, { lastOutboundAt }) {
+  const gid = String(greenInstanceDbId || '').trim();
+  const p = String(phoneNormalized || '').trim();
+  if (!gid || !p) return;
+  const ms = Number(lastOutboundAt);
+  const dt = Number.isFinite(ms) ? new Date(ms) : null;
+  await pool.execute(
+    `UPDATE conversation_state
+     SET last_outbound_at = ?, updated_at = NOW(3)
+     WHERE green_instance_db_id = ? AND phone_normalized = ?`,
+    [dt, gid, p],
+  );
+}
+
+async function updateInboundMeta(greenInstanceDbId, phoneNormalized, { lastInboundAt }) {
+  const gid = String(greenInstanceDbId || '').trim();
+  const p = String(phoneNormalized || '').trim();
+  if (!gid || !p) return;
+  const ms = Number(lastInboundAt);
+  const dt = Number.isFinite(ms) ? new Date(ms) : null;
+  await pool.execute(
+    `UPDATE conversation_state
+     SET last_inbound_at = ?, updated_at = NOW(3)
+     WHERE green_instance_db_id = ? AND phone_normalized = ?`,
+    [dt, gid, p],
+  );
+}
+
+async function setFollowupState(greenInstanceDbId, phoneNormalized, { followupStep, followupNextAt, followupCancelled }) {
+  const gid = String(greenInstanceDbId || '').trim();
+  const p = String(phoneNormalized || '').trim();
+  if (!gid || !p) return;
+  const step = Math.max(0, Math.floor(Number(followupStep) || 0));
+  const nextMs = followupNextAt == null ? null : Number(followupNextAt);
+  const nextDt = nextMs != null && Number.isFinite(nextMs) ? new Date(nextMs) : null;
+  const cancelled = followupCancelled ? 1 : 0;
+  await pool.execute(
+    `UPDATE conversation_state
+     SET followup_step = ?, followup_next_at = ?, followup_cancelled = ?
+     WHERE green_instance_db_id = ? AND phone_normalized = ?`,
+    [step, nextDt, cancelled, gid, p],
+  );
+}
+
+async function listEligibleForFollowup({ now, limit = 50 }) {
+  const lim = Math.max(1, Math.min(500, Math.floor(Number(limit) || 50)));
+  const rawDt = now instanceof Date ? now : new Date(now);
+  const dt = !Number.isNaN(rawDt.getTime()) ? rawDt : new Date();
+  const [rows] = await pool.execute(
+    `SELECT green_instance_db_id, phone_normalized, campaign_id,
+            followup_step, followup_next_at, last_outbound_at
+     FROM conversation_state
+     WHERE (status IS NULL OR status = 'active')
+       AND followup_cancelled = 0
+       AND followup_step < 3
+       AND last_outbound_at IS NOT NULL
+       AND (last_inbound_at IS NULL OR last_inbound_at < last_outbound_at)
+       AND (followup_next_at IS NULL OR followup_next_at <= ?)
+     ORDER BY followup_next_at ASC
+     LIMIT ${lim}`,
+    [dt],
+  );
+  return rows;
 }
 
 /**
@@ -162,4 +335,8 @@ module.exports = {
   updateLastSent,
   updateLastSentUnconditional,
   deleteState,
+  updateOutboundMeta,
+  updateInboundMeta,
+  setFollowupState,
+  listEligibleForFollowup,
 };

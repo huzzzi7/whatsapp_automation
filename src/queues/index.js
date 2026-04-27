@@ -23,6 +23,9 @@ const queueOpts = {
 const messageQueue = new Queue('messageQueue', queueOpts);
 const replyQueue = new Queue('replyQueue', queueOpts);
 const followupQueue = new Queue('followupQueue', queueOpts);
+// Phase 6 — dedicated scheduler queue (avoid stealing coordinator_tick jobs from followupQueue)
+const followupSchedulerQueue = new Queue('followupSchedulerQueue', queueOpts);
+const warmupQueue = new Queue('warmupQueue', queueOpts);
 
 function attachErrorHandler(queue, name) {
   queue.on('error', (err) => {
@@ -33,11 +36,21 @@ function attachErrorHandler(queue, name) {
 attachErrorHandler(messageQueue, 'messageQueue');
 attachErrorHandler(replyQueue, 'replyQueue');
 attachErrorHandler(followupQueue, 'followupQueue');
+attachErrorHandler(followupSchedulerQueue, 'followupSchedulerQueue');
+attachErrorHandler(warmupQueue, 'warmupQueue');
 
-qlog.info({ event: 'queues_initialized', queues: ['messageQueue', 'replyQueue', 'followupQueue'] }, 'BullMQ queues initialized');
+qlog.info(
+  {
+    event: 'queues_initialized',
+    queues: ['messageQueue', 'replyQueue', 'followupQueue', 'followupSchedulerQueue', 'warmupQueue'],
+  },
+  'BullMQ queues initialized',
+);
 
 module.exports = {
   messageQueue,
   replyQueue,
   followupQueue,
+  followupSchedulerQueue,
+  warmupQueue,
 };

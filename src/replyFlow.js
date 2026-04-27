@@ -8,7 +8,8 @@ const { enqueueMessage } = require('./queues/enqueueMessage');
 const state = require('./state');
 const testState = require('./testState');
 const appConfig = require('../config');
-const { createLogger } = require('./utils/logger');
+const { createLogger, logger } = require('./utils/logger');
+const { updateOutboundMeta } = require('./repositories/conversationStateRepository');
 
 const inFlightMap = new Map();
 const logWebhook = createLogger('webhook');
@@ -256,6 +257,11 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
         lastOutboundAt: Date.now(),
         status: 'active',
       });
+      try {
+        await updateOutboundMeta(greenInstanceDbId, phoneDigits, { lastOutboundAt: Date.now() });
+      } catch (err) {
+        logger.warn('[ReplyFlow] updateOutboundMeta failed (non-fatal):', err.message);
+      }
       startedUsers += 1;
       sentPhoneDigits.push(phoneDigits);
     } else if (sendResult.error) {
@@ -467,6 +473,11 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
           lastSentIndex: newIndex,
           lastOutboundAt: Date.now(),
         });
+        try {
+          await updateOutboundMeta(greenInstanceDbId, normalized, { lastOutboundAt: Date.now() });
+        } catch (err) {
+          logger.warn('[ReplyFlow] updateOutboundMeta failed (non-fatal):', err.message);
+        }
       }
     } else if (newIndex >= sequence.length) {
       store.deleteState(greenInstanceDbId, normalized);
@@ -478,6 +489,11 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
         lastSentIndex: newIndex,
         lastOutboundAt: Date.now(),
       });
+      try {
+        await updateOutboundMeta(greenInstanceDbId, normalized, { lastOutboundAt: Date.now() });
+      } catch (err) {
+        logger.warn('[ReplyFlow] updateOutboundMeta failed (non-fatal):', err.message);
+      }
     }
   } finally {
     releaseInFlightLock(lockKey);

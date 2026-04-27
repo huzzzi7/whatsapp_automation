@@ -15,6 +15,9 @@ const testState = require('./testState');
 const { insertIncomingMessage } = require('./repositories/incomingMessageRepository');
 const { clearMessagesQueue } = require('./greenapi');
 const { clearPauseFlag, clearDepthCache } = require('./services/greenQueueMonitor');
+const { updateInboundMeta, setFollowupState } = require('./repositories/conversationStateRepository');
+const { cancelPendingForConversation } = require('./repositories/followupRepository');
+const { logger } = require('./utils/logger');
 
 /**
  * Green API timestamps are usually Unix seconds; Date.now() is ms. Normalize to ms then bucket by 5s.
@@ -185,6 +188,25 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   }
   console.log('[DEDUPE_RESULT] inserted');
 
+  // Best-effort: record inbound timestamp for follow-up cancellation
+  try {
+    await updateInboundMeta(greenInstanceDbId, parsed.phone, { lastInboundAt: Date.now() });
+  } catch (err) {
+    logger.warn('[Webhook] updateInboundMeta failed (non-fatal):', err.message);
+  }
+
+  // Cancel any pending follow-ups since user replied
+  try {
+    await cancelPendingForConversation(greenInstanceDbId, parsed.phone);
+    await setFollowupState(greenInstanceDbId, parsed.phone, {
+      followupStep: 0,
+      followupNextAt: null,
+      followupCancelled: 1,
+    });
+  } catch (err) {
+    logger.warn('[Webhook] followup cancellation failed (non-fatal):', err.message);
+  }
+
   const intent = detectIntent(parsed.text);
   let intentReplySent = false;
   console.log(
@@ -240,6 +262,17 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
       }
     }
     await persistStoppedStatus();
+    // Explicit opt-out clarity: cancel any pending follow-ups
+    try {
+      await cancelPendingForConversation(greenInstanceDbId, parsed.phone);
+      await setFollowupState(greenInstanceDbId, parsed.phone, {
+        followupStep: 0,
+        followupNextAt: null,
+        followupCancelled: 1,
+      });
+    } catch (err) {
+      logger.warn('[Webhook] followup cancellation failed (non-fatal):', err.message);
+    }
     console.log('[Intent] Sequence stopped for', parsed.phone);
     return;
   }

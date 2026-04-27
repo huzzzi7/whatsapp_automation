@@ -51,6 +51,13 @@ export default function Sidebar() {
             Campaign
           </NavLink>
         </li>
+        {String(user?.role || '').toLowerCase() === 'admin' && (
+          <li style={{ marginBottom: '4px' }}>
+            <NavLink to="/warmup" className={navClass}>
+              Warm-up
+            </NavLink>
+          </li>
+        )}
         <li style={{ marginBottom: '4px' }}>
           <NavLink to="/campaign-details" className={navClass}>
             Campaign details

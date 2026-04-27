@@ -7,7 +7,9 @@ const { logger } = require('./src/utils/logger');
 const { messageQueue, replyQueue, followupQueue } = require('./src/queues');
 const { closeWorkers } = require('./src/queues/messageWorker');
 const { closeCoordinatorWorker } = require('./src/queues/coordinatorWorker');
+const { closeWarmupWorker } = require('./src/queues/warmupWorker');
 const { registerCoordinatorJob } = require('./src/queues/registerCoordinatorJob');
+const { registerFollowupSchedulerJob } = require('./src/queues/registerFollowupSchedulerJob');
 const express = require('express');
 const session = require('express-session');
 const MySQLStore = require('express-mysql-session')(session);
@@ -54,6 +56,8 @@ const {
 } = require('./src/repositories/campaignRepository');
 const { tryRunNext } = require('./src/services/CampaignCoordinator');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
+const { startWarmupSession, stopWarmupSession, getWarmupStatus } = require('./src/services/WarmupCoordinator');
+const warmupRepository = require('./src/repositories/warmupRepository');
 
 const MIN_NODE_MAJOR = 20;
 const MIN_NODE_MINOR = 19;
@@ -103,6 +107,11 @@ app.use((req, res, next) => {
   logger.debug({ event: 'http_request', method: req.method, url: req.url }, 'http_request');
   next();
 });
+
+// Ensure WarmupWorker is bound (Phase 5)
+require('./src/queues/warmupWorker');
+// Ensure Phase 6 followup scheduler worker is bound
+require('./src/queues/followupSchedulerWorker');
 
 function testBanner() {
   console.log('=============================');
@@ -511,6 +520,60 @@ app.post('/api/admin/retry-redis-failed', requireAdmin, async (req, res) => {
 // GET /api/campaign/templates – default {{university}} / {{link}} / {{group}} template strings for dashboard modal
 app.get('/api/campaign/templates', (req, res) => {
   res.json({ templates: defaultTemplateStrings() });
+});
+
+// ============================================================
+// Phase 5 — Warm-up System (Anti-Ban Core)
+// ============================================================
+
+// POST /api/warmup/start — starts one warmup session (admin only)
+app.post('/api/warmup/start', requireAdmin, async (req, res) => {
+  try {
+    const result = await startWarmupSession();
+    const pairsCount = Array.isArray(result?.pairs) ? result.pairs.length : null;
+    res.json({
+      ok: true,
+      alreadyRunning: Boolean(result?.alreadyRunning),
+      sessionId: result?.session?.id || result?.sessionId || null,
+      pairs: pairsCount,
+      session: result?.session || null,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Warmup start failed.' });
+  }
+});
+
+// POST /api/warmup/stop — stops a warmup session (admin only)
+app.post('/api/warmup/stop', requireAdmin, async (req, res) => {
+  try {
+    const sessionId = String(req.body?.sessionId || '').trim();
+    if (!sessionId) return res.status(400).json({ ok: false, error: 'sessionId is required' });
+    const result = await stopWarmupSession(sessionId);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Warmup stop failed.' });
+  }
+});
+
+// GET /api/warmup/status — active session or explicit id (admin only)
+app.get('/api/warmup/status', requireAdmin, async (req, res) => {
+  try {
+    const sessionId = req.query?.sessionId != null && String(req.query.sessionId).trim() !== '' ? String(req.query.sessionId).trim() : null;
+    const data = await getWarmupStatus(sessionId);
+    res.json({ ok: true, ...data });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Warmup status failed.' });
+  }
+});
+
+// GET /api/warmup/templates — list warmup templates (admin only)
+app.get('/api/warmup/templates', requireAdmin, async (req, res) => {
+  try {
+    const templates = await warmupRepository.getAllTemplates();
+    res.json({ ok: true, templates });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message || 'Warmup templates fetch failed.' });
+  }
 });
 
 // --- Green API instances (CRUD) ---
@@ -1527,6 +1590,9 @@ app.listen(PORT, '0.0.0.0', () => {
   registerCoordinatorJob().catch((err) =>
     logger.error({ err: err.message, event: 'coordinator_register_failed' }, 'Failed to register coordinator job'),
   );
+  registerFollowupSchedulerJob().catch((err) =>
+    logger.error('[Server] registerFollowupSchedulerJob failed:', err),
+  );
   logger.info(
     { event: 'bullmq_coordinator_registered', coordinatorTickMs: parseInt(process.env.COORDINATOR_TICK_MS || '15000', 10) || 15000 },
     'BullMQ coordinator tick registered (see COORDINATOR_TICK_MS)',
@@ -1535,7 +1601,7 @@ app.listen(PORT, '0.0.0.0', () => {
 
 process.on('SIGTERM', async () => {
   logger.info({ event: 'shutdown_sigterm' }, 'SIGTERM received, closing workers...');
-  await Promise.all([closeWorkers(), closeCoordinatorWorker()]);
+  await Promise.all([closeWorkers(), closeCoordinatorWorker(), closeWarmupWorker()]);
   try {
     await pool.end();
   } catch (e) {
@@ -1545,7 +1611,7 @@ process.on('SIGTERM', async () => {
 });
 process.on('SIGINT', async () => {
   logger.info({ event: 'shutdown_sigint' }, 'SIGINT received, closing workers...');
-  await Promise.all([closeWorkers(), closeCoordinatorWorker()]);
+  await Promise.all([closeWorkers(), closeCoordinatorWorker(), closeWarmupWorker()]);
   try {
     await pool.end();
   } catch (e) {

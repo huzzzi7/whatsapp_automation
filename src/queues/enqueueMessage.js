@@ -1,14 +1,14 @@
 /**
  * Queue-first send path: enqueue job; workers run controlledSend.
  */
-const { messageQueue, replyQueue } = require('./index');
+const { messageQueue, replyQueue, warmupQueue } = require('./index');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('worker');
 
 /**
  * @param {object} payload
- * @param {'message'|'reply'} [queueTarget]
+ * @param {'message'|'reply'|'warmup'} [queueTarget]
  */
 async function enqueueMessage(payload, queueTarget = 'message') {
   const jobId = `${payload.greenInstanceDbId || 'x'}-${payload.phoneDigits || payload.chatId}-${payload.messageCount ?? 0}-${Date.now()}`;
@@ -21,7 +21,12 @@ async function enqueueMessage(payload, queueTarget = 'message') {
   };
 
   try {
-    const queue = queueTarget === 'reply' ? replyQueue : messageQueue;
+    const queue =
+      queueTarget === 'reply'
+        ? replyQueue
+        : queueTarget === 'warmup'
+          ? warmupQueue
+          : messageQueue;
     await queue.add('send_message', payload, jobOptions);
     log.debug(
       {

@@ -87,7 +87,18 @@ async function controlledSend({
     finalDelay = lo + Math.floor(Math.random() * (hi - lo + 1));
   }
 
-  if (shouldSkip) {
+  // Warmup context: use short fixed delays (no human-pause, no cooldown bloat)
+  // Warmup only needs conversation history to exist, not human timing simulation
+  if (ctx === 'warmup') {
+    const lo = 20000;
+    const hi = 40000;
+    finalDelay = lo + Math.floor(Math.random() * (hi - lo + 1));
+  }
+
+  // Warmup messages must never be skipped — override any skip from behavior/delay engines
+  const effectiveSkip = ctx === 'warmup' ? false : shouldSkip;
+
+  if (effectiveSkip) {
     child.info(
       { event: 'message_skipped_pipeline', context: ctx, messageCount: safeCount },
       'message_skipped_pipeline',

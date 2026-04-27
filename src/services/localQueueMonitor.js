@@ -3,7 +3,7 @@
  * Checks waiting + active job count before processing a send job.
  * Prevents worker from processing when local backlog is too large.
  */
-const { messageQueue, replyQueue } = require('../queues/index');
+const { messageQueue, replyQueue, warmupQueue } = require('../queues/index');
 
 /** @type {Map<string, { depth: number, fetchedAt: number }>} */
 const jobCountsCache = new Map();
@@ -13,6 +13,7 @@ const JOB_COUNTS_CACHE_TTL_MS = 500;
 const QUEUE_MAP = {
   messageQueue,
   replyQueue,
+  warmupQueue,
 };
 
 function getQueueByName(name) {

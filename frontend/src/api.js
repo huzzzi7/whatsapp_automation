@@ -278,3 +278,30 @@ export async function getStateByPhone(phone, greenInstanceId) {
     : '';
   return apiFetch(`/api/state/${encodeURIComponent(phone)}${q}`, { method: 'GET' });
 }
+
+// ============================================================
+// Phase 5 — Warm-up System
+// ============================================================
+
+export async function startWarmup() {
+  return apiFetch('/api/warmup/start', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export async function stopWarmup(sessionId) {
+  return apiFetch('/api/warmup/stop', {
+    method: 'POST',
+    body: JSON.stringify({ sessionId }),
+  });
+}
+
+export async function getWarmupStatus(sessionId) {
+  const q = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+  return apiFetch(`/api/warmup/status${q}`, { method: 'GET' });
+}
+
+export async function listWarmupTemplates() {
+  return apiFetch('/api/warmup/templates', { method: 'GET' });
+}

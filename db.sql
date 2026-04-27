@@ -182,6 +182,73 @@ INSERT INTO `users` (`id`, `name`, `email`, `passwordHash`, `role`, `createdAt`)
 ('7ec507a6-97e3-41c1-aabb-5909397cc8c9', 'Bot 2', 'jonny@fresherswelcomeweek.com', '$2b$10$wOVwDGvzkX0OBey368KoTeqZGFnPGyo8RJSodUGckJLFPlKG6W/rK', 'ADMIN', '2026-04-08 11:14:37'),
 ('8340ba3c-e036-4c44-93a4-d1169427afe4', 'Jonny', 'jonny@ultimatefreshersevents.com', '$2b$10$as.GxUOv..vrBdMBC7MDmu2JjQalHQQe/pDe1xqvSPbdpL0NWUd7W', 'ADMIN', '2026-03-25 04:57:07');
 
+-- --------------------------------------------------------
+--
+-- Phase 5 — Warm-up system tables (Anti-Ban Core)
+--
+
+CREATE TABLE IF NOT EXISTS `warmup_templates` (
+  `id` int unsigned NOT NULL AUTO_INCREMENT,
+  `template_index` int NOT NULL COMMENT 'Order of template (1-30)',
+  `template_name` varchar(100) NOT NULL COMMENT 'Human label e.g. Daily Routine',
+  `messages_json` longtext NOT NULL COMMENT 'JSON array of {role: A|B, text: string}',
+  `is_active` tinyint(1) NOT NULL DEFAULT '1',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_template_index` (`template_index`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `warmup_sessions` (
+  `id` varchar(36) NOT NULL COMMENT 'UUID',
+  `status` enum('running','completed','stopped','failed') NOT NULL DEFAULT 'running',
+  `messages_per_pair` int NOT NULL DEFAULT '10' COMMENT 'Target messages per pair conversation',
+  `started_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `completed_at` timestamp NULL DEFAULT NULL,
+  `stopped_at` timestamp NULL DEFAULT NULL,
+  `error_message` text COLLATE utf8mb4_unicode_ci,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `warmup_pairs` (
+  `id` varchar(36) NOT NULL COMMENT 'UUID',
+  `session_id` varchar(36) NOT NULL,
+  `sender_instance_db_id` varchar(36) NOT NULL COMMENT 'green_instances.id playing A role',
+  `receiver_instance_db_id` varchar(36) NOT NULL COMMENT 'green_instances.id playing B role',
+  `template_id` int unsigned NOT NULL COMMENT 'warmup_templates.id used for this pair',
+  `status` enum('pending','running','completed','failed') NOT NULL DEFAULT 'pending',
+  `messages_sent` int NOT NULL DEFAULT '0',
+  `messages_target` int NOT NULL DEFAULT '10',
+  `last_message_at` timestamp NULL DEFAULT NULL,
+  `error_message` text COLLATE utf8mb4_unicode_ci,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_session` (`session_id`),
+  KEY `idx_status` (`status`),
+  CONSTRAINT `fk_warmup_pairs_session` FOREIGN KEY (`session_id`) REFERENCES `warmup_sessions` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `warmup_messages` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `pair_id` varchar(36) NOT NULL,
+  `session_id` varchar(36) NOT NULL,
+  `sender_instance_db_id` varchar(36) NOT NULL,
+  `receiver_instance_db_id` varchar(36) NOT NULL,
+  `role` enum('A','B') NOT NULL COMMENT 'Which role in the template sent this',
+  `message_text` text NOT NULL,
+  `message_index` int NOT NULL COMMENT 'Index in template messages array',
+  `status` enum('queued','sent','failed') NOT NULL DEFAULT 'queued',
+  `sent_at` timestamp NULL DEFAULT NULL,
+  `error_message` text COLLATE utf8mb4_unicode_ci,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_pair` (`pair_id`),
+  KEY `idx_session` (`session_id`),
+  CONSTRAINT `fk_warmup_messages_pair` FOREIGN KEY (`pair_id`) REFERENCES `warmup_pairs` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 --
 -- Indexes for dumped tables
 --

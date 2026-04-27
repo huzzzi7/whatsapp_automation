@@ -12,6 +12,10 @@ const REQUIRED = [
   'sessions',
   'incoming_messages_log',
   'conversation_state',
+  'warmup_templates',
+  'warmup_sessions',
+  'warmup_pairs',
+  'warmup_messages',
 ];
 
 const DDL = {
@@ -104,6 +108,64 @@ const DDL = {
   UNIQUE KEY uniq_state (green_instance_db_id, phone_normalized),
   KEY idx_conversation_state_updated (green_instance_db_id, updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  warmup_templates: `CREATE TABLE IF NOT EXISTS warmup_templates (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  template_index INT NOT NULL,
+  template_name VARCHAR(100) NOT NULL,
+  messages_json LONGTEXT NOT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_template_index (template_index)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  warmup_sessions: `CREATE TABLE IF NOT EXISTS warmup_sessions (
+  id VARCHAR(36) PRIMARY KEY,
+  status ENUM('running','completed','stopped','failed') NOT NULL DEFAULT 'running',
+  messages_per_pair INT NOT NULL DEFAULT 10,
+  started_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP NULL,
+  stopped_at TIMESTAMP NULL,
+  error_message TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  warmup_pairs: `CREATE TABLE IF NOT EXISTS warmup_pairs (
+  id VARCHAR(36) PRIMARY KEY,
+  session_id VARCHAR(36) NOT NULL,
+  sender_instance_db_id VARCHAR(36) NOT NULL,
+  receiver_instance_db_id VARCHAR(36) NOT NULL,
+  template_id INT UNSIGNED NOT NULL,
+  status ENUM('pending','running','completed','failed') NOT NULL DEFAULT 'pending',
+  messages_sent INT NOT NULL DEFAULT 0,
+  messages_target INT NOT NULL DEFAULT 10,
+  last_message_at TIMESTAMP NULL,
+  error_message TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_session (session_id),
+  KEY idx_status (status),
+  CONSTRAINT fk_warmup_pairs_session FOREIGN KEY (session_id) REFERENCES warmup_sessions(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  warmup_messages: `CREATE TABLE IF NOT EXISTS warmup_messages (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  pair_id VARCHAR(36) NOT NULL,
+  session_id VARCHAR(36) NOT NULL,
+  sender_instance_db_id VARCHAR(36) NOT NULL,
+  receiver_instance_db_id VARCHAR(36) NOT NULL,
+  role ENUM('A','B') NOT NULL,
+  message_text TEXT NOT NULL,
+  message_index INT NOT NULL,
+  status ENUM('queued','sent','failed') NOT NULL DEFAULT 'queued',
+  sent_at TIMESTAMP NULL,
+  error_message TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_pair (pair_id),
+  KEY idx_session (session_id),
+  CONSTRAINT fk_warmup_messages_pair FOREIGN KEY (pair_id) REFERENCES warmup_pairs(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 };
 
 async function main() {
@@ -130,6 +192,10 @@ async function main() {
     'sessions',
     'incoming_messages_log',
     'conversation_state',
+    'warmup_templates',
+    'warmup_sessions',
+    'warmup_pairs',
+    'warmup_messages',
   ];
   for (const name of order) {
     if (existing.has(name)) {
@@ -157,6 +223,8 @@ async function main() {
 
   await ensureIncomingMessagesDedupeKey(conn);
   await ensureConversationStateStatusColumn(conn);
+  await ensureFollowupColumns(conn);
+  await ensureFollowupJobsTable(conn);
 
   await conn.end();
 }
@@ -207,6 +275,74 @@ async function ensureConversationStateStatusColumn(conn) {
     console.log('MIGRATE: conversation_state — adding status column');
     await conn.query('ALTER TABLE conversation_state ADD COLUMN status VARCHAR(32) NULL');
   }
+}
+
+/** Add Phase 6 follow-up columns to conversation_state (idempotent). */
+async function ensureFollowupColumns(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  async function hasColumn(name) {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'conversation_state' AND COLUMN_NAME = ?`,
+      [schema, name],
+    );
+    return Number(rows[0]?.cnt) > 0;
+  }
+
+  if (!(await hasColumn('last_outbound_at'))) {
+    console.log('MIGRATE: conversation_state — adding last_outbound_at column');
+    await conn.query('ALTER TABLE conversation_state ADD COLUMN last_outbound_at DATETIME(3) NULL');
+  }
+
+  if (!(await hasColumn('last_inbound_at'))) {
+    console.log('MIGRATE: conversation_state — adding last_inbound_at column');
+    await conn.query('ALTER TABLE conversation_state ADD COLUMN last_inbound_at DATETIME(3) NULL');
+  }
+
+  if (!(await hasColumn('followup_step'))) {
+    console.log('MIGRATE: conversation_state — adding followup_step column');
+    await conn.query('ALTER TABLE conversation_state ADD COLUMN followup_step INT NOT NULL DEFAULT 0');
+  }
+
+  if (!(await hasColumn('followup_next_at'))) {
+    console.log('MIGRATE: conversation_state — adding followup_next_at column');
+    await conn.query('ALTER TABLE conversation_state ADD COLUMN followup_next_at DATETIME(3) NULL');
+  }
+
+  if (!(await hasColumn('followup_cancelled'))) {
+    console.log('MIGRATE: conversation_state — adding followup_cancelled column');
+    await conn.query(
+      'ALTER TABLE conversation_state ADD COLUMN followup_cancelled TINYINT(1) NOT NULL DEFAULT 0',
+    );
+  }
+}
+
+/** Ensure followup_jobs exists (Phase 6). */
+async function ensureFollowupJobsTable(conn) {
+  await conn.query(
+    `CREATE TABLE IF NOT EXISTS followup_jobs (
+      id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      green_instance_db_id VARCHAR(64) NOT NULL,
+      phone_normalized    VARCHAR(32) NOT NULL,
+      campaign_id         VARCHAR(255) NULL,
+      step                INT NOT NULL,
+      status              ENUM('queued','sent','cancelled','failed') NOT NULL DEFAULT 'queued',
+      due_at              DATETIME(3) NOT NULL,
+      enqueued_at         DATETIME(3) NULL,
+      sent_at             DATETIME(3) NULL,
+      cancelled_at        DATETIME(3) NULL,
+      last_error          TEXT NULL,
+      created_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      updated_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+                          ON UPDATE CURRENT_TIMESTAMP(3),
+      KEY idx_followup_due (status, due_at),
+      KEY idx_followup_instance_phone (green_instance_db_id, phone_normalized),
+      UNIQUE KEY uniq_followup_active (green_instance_db_id, phone_normalized, step, status)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  );
 }
 
 main().catch((e) => {
