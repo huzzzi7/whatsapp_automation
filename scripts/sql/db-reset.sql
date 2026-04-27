@@ -11,7 +11,6 @@ SET FOREIGN_KEY_CHECKS = 0;
 DROP TABLE IF EXISTS warmup_messages;
 DROP TABLE IF EXISTS warmup_pairs;
 DROP TABLE IF EXISTS warmup_sessions;
-DROP TABLE IF EXISTS warmup_templates;
 DROP TABLE IF EXISTS campaign_contacts;
 DROP TABLE IF EXISTS campaigns;
 DROP TABLE IF EXISTS followup_jobs;
@@ -106,17 +105,6 @@ CREATE TABLE IF NOT EXISTS followup_jobs (
   KEY idx_followup_due (status, due_at),
   KEY idx_followup_instance_phone (green_instance_db_id, phone_normalized),
   UNIQUE KEY uniq_followup_active (green_instance_db_id, phone_normalized, step, status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS warmup_templates (
-  id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  template_index INT NOT NULL,
-  template_name VARCHAR(100) NOT NULL,
-  messages_json LONGTEXT NOT NULL,
-  is_active TINYINT(1) NOT NULL DEFAULT 1,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uq_template_index (template_index)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS warmup_sessions (
