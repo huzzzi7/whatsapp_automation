@@ -10,7 +10,7 @@ const { v4: uuidv4 } = require('uuid');
 
   await pool.execute('INSERT INTO users (id, email, passwordHash, role) VALUES (?, ?, ?, ?)', [
     uuidv4(),
-    'admin@gmail.com',
+    'jonny@ultimatefreshersevents.com',
     passwordHash,
     'ADMIN',
   ]);

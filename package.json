@@ -14,7 +14,8 @@
     "logs": "node scripts/tail-app-log.js --out=logs/live-capture.log",
     "logs:fresh": "node scripts/tail-app-log.js --out=auto",
     "logs:snapshot": "powershell -ExecutionPolicy Bypass -File scripts/snapshot-logs.ps1",
-    "create-admin": "node scripts/create-admin.js"
+    "create-admin": "node scripts/create-admin.js",
+    "db:reset": "node scripts/db-reset.js"
   },
   "engines": {
     "node": ">=20.19.0"
