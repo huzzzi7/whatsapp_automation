@@ -15,11 +15,12 @@ const {
 } = require('../repositories/campaignRepository');
 const { runCampaignWorker } = require('./CampaignWorker');
 const { createLogger } = require('../utils/logger');
+const pool = require('../mysql');
 
 const log = createLogger('worker');
 
-/** In-process guard: one async worker per campaign id (avoids duplicate workers on repeated tryRunNext). */
-const activeWorkerCampaignIds = new Set();
+/** In-process guard: one async worker per campaign+instance key (avoids duplicates on repeated tryRunNext). */
+const activeWorkerKeys = new Set();
 
 function scheduleTryRunNext() {
   setImmediate(() => {
@@ -38,15 +39,17 @@ function scheduleTryRunNext() {
  * @param {{ greenInstanceId?: string }} [meta] - for logs only
  */
 function kickWorker(campaignId, meta = {}) {
-  if (activeWorkerCampaignIds.has(campaignId)) return;
-  activeWorkerCampaignIds.add(campaignId);
+  const workerInstanceId = meta.workerInstanceId != null ? String(meta.workerInstanceId).trim() : '';
+  const key = `${campaignId}:${workerInstanceId || 'default'}`;
+  if (activeWorkerKeys.has(key)) return;
+  activeWorkerKeys.add(key);
   log.debug(
-    { event: 'worker_kick', campaignId, greenInstanceId: meta.greenInstanceId },
+    { event: 'worker_kick', campaignId, greenInstanceId: meta.greenInstanceId, workerInstanceId: workerInstanceId || undefined },
     'worker_kick',
   );
   (async () => {
     try {
-      await runCampaignWorker(campaignId);
+      await runCampaignWorker(campaignId, { workerInstanceId: workerInstanceId || undefined });
     } catch (err) {
       log.error(
         {
@@ -63,7 +66,7 @@ function kickWorker(campaignId, meta = {}) {
         });
       }
     } finally {
-      activeWorkerCampaignIds.delete(campaignId);
+      activeWorkerKeys.delete(key);
       scheduleTryRunNext();
     }
   })();
@@ -86,7 +89,21 @@ async function tryRunNext() {
 
   // Fire every running worker without awaiting — same event-loop turn for all kicks.
   for (const c of runningDb) {
-    kickWorker(c.id, { greenInstanceId: c.greenInstanceId });
+    if (c.isMultiInstance) {
+      const [rows] = await pool.execute(
+        `SELECT DISTINCT assigned_instance_id AS instanceId
+         FROM campaign_contacts
+         WHERE campaign_id = ? AND assigned_instance_id IS NOT NULL AND assigned_instance_id != ''
+         ORDER BY assigned_instance_id ASC`,
+        [c.id],
+      );
+      const ids = rows.map((r) => String(r.instanceId || '').trim()).filter(Boolean);
+      for (const workerInstanceId of ids) {
+        kickWorker(c.id, { greenInstanceId: c.greenInstanceId, workerInstanceId });
+      }
+    } else {
+      kickWorker(c.id, { greenInstanceId: c.greenInstanceId });
+    }
   }
 
   const queuedDue = await getQueuedCampaignsDueOrdered();
@@ -105,7 +122,7 @@ async function tryRunNext() {
 
       const first = queued[0];
       if (!first) return;
-      if (activeWorkerCampaignIds.has(first.id)) return;
+      if (activeWorkerKeys.has(`${first.id}:default`)) return;
 
       const promoted = await promoteQueuedCampaignToRunningIfDue(first.id);
 
@@ -118,7 +135,22 @@ async function tryRunNext() {
           },
           'campaign_promoted',
         );
-        kickWorker(first.id, { greenInstanceId: first.greenInstanceId });
+        const promotedCampaign = await getCampaignById(first.id);
+        if (promotedCampaign?.isMultiInstance) {
+          const [rows] = await pool.execute(
+            `SELECT DISTINCT assigned_instance_id AS instanceId
+             FROM campaign_contacts
+             WHERE campaign_id = ? AND assigned_instance_id IS NOT NULL AND assigned_instance_id != ''
+             ORDER BY assigned_instance_id ASC`,
+            [first.id],
+          );
+          const ids = rows.map((r) => String(r.instanceId || '').trim()).filter(Boolean);
+          for (const workerInstanceId of ids) {
+            kickWorker(first.id, { greenInstanceId: first.greenInstanceId, workerInstanceId });
+          }
+        } else {
+          kickWorker(first.id, { greenInstanceId: first.greenInstanceId });
+        }
       }
     }),
   );

@@ -5,38 +5,11 @@ const pool = require('../mysql');
 const { toChatId } = require('../phone');
 const { resolveGreenApiConfig } = require('../greenInstance');
 const { controlledSend } = require('./controlledSend');
+const { waitForRateLimit } = require('../utils/instanceRateLimiter');
 const warmupRepository = require('../repositories/warmupRepository');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('worker');
-
-const instanceSendLog = new Map();
-// key: instanceId (green instanceId string), value: { count: number, windowStart: number }
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function waitForRateLimit(instanceId) {
-  const WINDOW_MS = 60000; // 1 minute
-  const MAX_PER_WINDOW = 2 + Math.floor(Math.random() * 2); // 2 or 3
-  const now = Date.now();
-  if (!instanceSendLog.has(instanceId)) {
-    instanceSendLog.set(instanceId, { count: 0, windowStart: now });
-  }
-  const entry = instanceSendLog.get(instanceId);
-  if (now - entry.windowStart >= WINDOW_MS) {
-    entry.count = 0;
-    entry.windowStart = now;
-  }
-  if (entry.count >= MAX_PER_WINDOW) {
-    const waitMs = WINDOW_MS - (now - entry.windowStart) + 500;
-    await sleep(waitMs);
-    entry.count = 0;
-    entry.windowStart = Date.now();
-  }
-  entry.count += 1;
-}
 
 function safeParseMessagesJson(messagesJson) {
   try {

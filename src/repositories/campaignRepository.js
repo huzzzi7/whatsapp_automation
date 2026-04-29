@@ -31,6 +31,13 @@ function mapCampaignRow(row) {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     scheduledAt: row.scheduled_at ?? null,
+    operationalStart: row.operational_start ?? null,
+    operationalEnd: row.operational_end ?? null,
+    operationalDays: row.operational_days ?? null,
+    campaignEndDate: row.campaign_end_date ?? null,
+    dailyLimitPerInstance: row.daily_limit_per_instance ?? null,
+    isMultiInstance:
+      row.is_multi_instance != null ? Boolean(Number(row.is_multi_instance)) : false,
   };
 }
 
@@ -45,17 +52,48 @@ async function createCampaign({
   totalContacts,
   queueOrder,
   scheduledAt = null,
+  operationalStart = null,
+  operationalEnd = null,
+  operationalDays = null,
+  campaignEndDate = null,
+  dailyLimitPerInstance = null,
+  isMultiInstance = false,
 }) {
   let sched = null;
   if (scheduledAt != null) {
     const d = scheduledAt instanceof Date ? scheduledAt : new Date(scheduledAt);
     if (!Number.isNaN(d.getTime())) sched = d;
   }
+
+  const opStart =
+    operationalStart != null && String(operationalStart).trim() !== ''
+      ? String(operationalStart).trim().slice(0, 8)
+      : null;
+  const opEnd =
+    operationalEnd != null && String(operationalEnd).trim() !== ''
+      ? String(operationalEnd).trim().slice(0, 8)
+      : null;
+  const opDays =
+    operationalDays != null && String(operationalDays).trim() !== ''
+      ? String(operationalDays).trim().slice(0, 20)
+      : null;
+  const endDate =
+    campaignEndDate != null && String(campaignEndDate).trim() !== ''
+      ? String(campaignEndDate).trim().slice(0, 10)
+      : null;
+  const dailyLimit =
+    dailyLimitPerInstance != null && Number.isFinite(Number(dailyLimitPerInstance))
+      ? Math.max(1, Math.floor(Number(dailyLimitPerInstance)))
+      : null;
+  const multi = isMultiInstance ? 1 : 0;
+
   await pool.execute(
     `INSERT INTO campaigns (
       id, green_instance_id, name, status, queue_order, total_contacts,
-      batch_size, scheduled_at
-    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)`,
+      batch_size, scheduled_at,
+      operational_start, operational_end, operational_days, campaign_end_date,
+      daily_limit_per_instance, is_multi_instance
+    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       greenInstanceId,
@@ -64,6 +102,12 @@ async function createCampaign({
       totalContacts,
       batchSize,
       sched,
+      opStart,
+      opEnd,
+      opDays,
+      endDate,
+      dailyLimit,
+      multi,
     ],
   );
   const [rows] = await pool.execute('SELECT * FROM campaigns WHERE id = ? LIMIT 1', [id]);
@@ -325,6 +369,28 @@ async function listCampaignContactsPage(campaignId, page, limit) {
   return rows;
 }
 
+async function updateContactInstanceAssignment(contactId, instanceId) {
+  const iid = instanceId != null && String(instanceId).trim() !== '' ? String(instanceId).trim() : null;
+  await pool.execute(`UPDATE campaign_contacts SET assigned_instance_id = ? WHERE id = ?`, [
+    iid,
+    Number(contactId),
+  ]);
+}
+
+async function getContactsByInstance(campaignId, instanceId, status = 'pending') {
+  const gid = String(campaignId || '').trim();
+  const iid = String(instanceId || '').trim();
+  const st = String(status || 'pending').trim().toLowerCase();
+  const [rows] = await pool.execute(
+    `SELECT *
+     FROM campaign_contacts
+     WHERE campaign_id = ? AND assigned_instance_id = ? AND first_send_status = ?
+     ORDER BY sort_order ASC`,
+    [gid, iid, st],
+  );
+  return rows;
+}
+
 /**
  * @param {string} campaignId
  * @param {string} status - queued | running | paused | completed | failed | cancelled | stopped
@@ -383,16 +449,26 @@ async function incrementSkippedCount(campaignId, count) {
   );
 }
 
-async function getPendingContacts(campaignId, limit) {
+async function getPendingContacts(campaignId, limit, instanceId) {
   const lim = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 1)));
-  const [rows] = await pool.execute(
-    `SELECT id, campaign_id, phone_normalized, payload_json, sort_order, first_send_status, attempt_count, last_error, sent_at
-     FROM campaign_contacts
-     WHERE campaign_id = ? AND first_send_status = 'pending'
-     ORDER BY sort_order ASC
-     LIMIT ${lim}`,
-    [campaignId],
-  );
+  const iid = instanceId != null && String(instanceId).trim() !== '' ? String(instanceId).trim() : null;
+  const [rows] = iid
+    ? await pool.execute(
+        `SELECT id, campaign_id, phone_normalized, payload_json, sort_order, first_send_status, attempt_count, last_error, sent_at
+         FROM campaign_contacts
+         WHERE campaign_id = ? AND assigned_instance_id = ? AND first_send_status = 'pending'
+         ORDER BY sort_order ASC
+         LIMIT ${lim}`,
+        [campaignId, iid],
+      )
+    : await pool.execute(
+        `SELECT id, campaign_id, phone_normalized, payload_json, sort_order, first_send_status, attempt_count, last_error, sent_at
+         FROM campaign_contacts
+         WHERE campaign_id = ? AND first_send_status = 'pending'
+         ORDER BY sort_order ASC
+         LIMIT ${lim}`,
+        [campaignId],
+      );
   return rows.map((row) => ({
     id: row.id,
     campaignId: row.campaign_id,
@@ -404,6 +480,55 @@ async function getPendingContacts(campaignId, limit) {
     lastError: row.last_error,
     sentAt: row.sent_at,
   }));
+}
+
+async function getDailyContactsSentCount(campaignId, instanceId, date) {
+  const cid = String(campaignId || '').trim();
+  const iid = String(instanceId || '').trim();
+  const day = String(date || '').trim().slice(0, 10);
+  if (!cid || !iid || !day) return 0;
+  // Conservative window around the intended local day. The worker passes `day` as YYYY-MM-DD
+  // for CAMPAIGN_TIMEZONE (Europe/London by default). We query a wider UTC range to avoid
+  // DB timezone dependence and to be DST-safe; over-counting near boundaries is safer for caps.
+  const dayStartUtc = new Date(`${day}T00:00:00Z`);
+  if (Number.isNaN(dayStartUtc.getTime())) return 0;
+  const rangeStart = new Date(dayStartUtc.getTime() - 2 * 60 * 60 * 1000); // -2h buffer
+  const rangeEnd = new Date(dayStartUtc.getTime() + 25 * 60 * 60 * 1000); // +25h buffer (27h total)
+  const fmtUtc = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
+  const [[row]] = await pool.execute(
+    `SELECT COUNT(*) AS cnt
+     FROM campaign_contacts
+     WHERE campaign_id = ?
+       AND assigned_instance_id = ?
+       AND first_send_status = 'sent'
+       AND sent_at >= ?
+       AND sent_at < ?`,
+    [cid, iid, fmtUtc(rangeStart), fmtUtc(rangeEnd)],
+  );
+  return Number(row?.cnt) || 0;
+}
+
+async function getActiveCampaignsDailyLoad(excludeCampaignId, instanceId) {
+  // Returns total dailyLimitPerInstance already committed by OTHER active/queued campaigns
+  // that share this instance (directly or via assigned_instance_id in contacts).
+  const eid = String(excludeCampaignId || '').trim();
+  const iid = String(instanceId || '').trim();
+  if (!iid) return 0;
+  const [rows] = await pool.execute(
+    `SELECT COALESCE(SUM(daily_limit_per_instance), 0) AS total
+     FROM campaigns
+     WHERE status IN ('queued', 'running', 'paused')
+       AND id != ?
+       AND (
+         green_instance_id = ?
+         OR id IN (
+           SELECT DISTINCT campaign_id FROM campaign_contacts WHERE assigned_instance_id = ?
+         )
+       )
+       AND daily_limit_per_instance IS NOT NULL`,
+    [eid, iid, iid],
+  );
+  return Number(rows[0]?.total) || 0;
 }
 
 async function markContactSent(contactId) {
@@ -447,6 +572,8 @@ module.exports = {
   createCampaign,
   getNextQueueOrder,
   insertCampaignContacts,
+  updateContactInstanceAssignment,
+  getContactsByInstance,
   setTotalContacts,
   getNextQueuedCampaign,
   promoteQueuedCampaignToRunningIfDue,
@@ -465,6 +592,8 @@ module.exports = {
   incrementFailedCount,
   incrementSkippedCount,
   getPendingContacts,
+  getDailyContactsSentCount,
+  getActiveCampaignsDailyLoad,
   markContactSent,
   markContactFailed,
   markContactSkipped,

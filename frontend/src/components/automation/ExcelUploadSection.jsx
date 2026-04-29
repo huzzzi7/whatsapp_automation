@@ -24,7 +24,7 @@ export default function ExcelUploadSection({
 
   const busy = disabled || uploading;
   const hasInstances = instances?.length > 0;
-  const canAct = Boolean(selectedInstanceId) && hasInstances;
+  const canAct = true;
 
   const publicWebhookBase = (import.meta.env.VITE_PUBLIC_WEBHOOK_BASE_URL || import.meta.env.VITE_API_URL || '')
     .trim()
@@ -35,10 +35,6 @@ export default function ExcelUploadSection({
     publicWebhookBase && webhookPath ? `${publicWebhookBase}${webhookPath}` : '';
 
   const handleUpload = async () => {
-    if (!canAct) {
-      onError?.(hasInstances ? 'Select a WhatsApp instance first.' : 'Add a Green API instance in Settings first.');
-      return;
-    }
     const file = inputRef.current?.files?.[0];
     if (!file) {
       onError?.('Please select a file.');
@@ -54,7 +50,9 @@ export default function ExcelUploadSection({
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('greenInstanceId', selectedInstanceId);
+      if (selectedInstanceId) {
+        formData.append('greenInstanceId', selectedInstanceId);
+      }
       const data = await uploadFile(formData);
       onUploaded?.(data);
     } catch (e) {
@@ -71,31 +69,33 @@ export default function ExcelUploadSection({
         Select an .xlsx file with campaign columns (same format as the legacy uploader).
       </p>
 
-      <div className="instance-select-row">
-        <label htmlFor="green-inst-select" className="ui-input-label">
-          Send from instance
-        </label>
-        <select
-          id="green-inst-select"
-          className="ui-input-field instance-select"
-          value={selectedInstanceId}
-          onChange={(e) => onSelectInstance?.(e.target.value)}
-          disabled={busy}
-        >
-          {!hasInstances ? (
-            <option value="">No instances — add in Settings</option>
-          ) : (
-            <>
-              <option value="">Select instance…</option>
-              {instances.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-            </>
-          )}
-        </select>
-      </div>
+      {onSelectInstance ? (
+        <div className="instance-select-row">
+          <label htmlFor="green-inst-select" className="ui-input-label">
+            Send from instance
+          </label>
+          <select
+            id="green-inst-select"
+            className="ui-input-field instance-select"
+            value={selectedInstanceId}
+            onChange={(e) => onSelectInstance?.(e.target.value)}
+            disabled={busy}
+          >
+            {!hasInstances ? (
+              <option value="">No instances — add in Settings</option>
+            ) : (
+              <>
+                <option value="">Select instance…</option>
+                {instances.map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.name}
+                  </option>
+                ))}
+              </>
+            )}
+          </select>
+        </div>
+      ) : null}
 
       {selectedInstanceId && webhookPath ? (
         <p className="excel-upload-section__webhook-hint" role="note">

@@ -168,7 +168,7 @@ const DDL = {
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 };
 
-async function main() {
+async function runCoreMigrations() {
   const conn = await mysql.createConnection({
     host: process.env.DB_HOST || '127.0.0.1',
     port: Number(process.env.DB_PORT) || 3306,
@@ -225,6 +225,8 @@ async function main() {
   await ensureConversationStateStatusColumn(conn);
   await ensureFollowupColumns(conn);
   await ensureFollowupJobsTable(conn);
+  await ensureCampaignScheduleColumns(conn);
+  await ensureCampaignContactsAssignmentColumn(conn);
 
   await conn.end();
 }
@@ -345,7 +347,70 @@ async function ensureFollowupJobsTable(conn) {
   );
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+async function ensureCampaignScheduleColumns(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  async function hasColumn(table, name) {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [schema, table, name],
+    );
+    return Number(rows[0]?.cnt) > 0;
+  }
+
+  // campaigns columns
+  if (!(await hasColumn('campaigns', 'operational_start'))) {
+    console.log('MIGRATE: campaigns — adding operational_start column');
+    await conn.query('ALTER TABLE campaigns ADD COLUMN operational_start TIME NULL DEFAULT NULL');
+  }
+  if (!(await hasColumn('campaigns', 'operational_end'))) {
+    console.log('MIGRATE: campaigns — adding operational_end column');
+    await conn.query('ALTER TABLE campaigns ADD COLUMN operational_end TIME NULL DEFAULT NULL');
+  }
+  if (!(await hasColumn('campaigns', 'operational_days'))) {
+    console.log('MIGRATE: campaigns — adding operational_days column');
+    await conn.query('ALTER TABLE campaigns ADD COLUMN operational_days VARCHAR(20) NULL DEFAULT NULL');
+  }
+  if (!(await hasColumn('campaigns', 'campaign_end_date'))) {
+    console.log('MIGRATE: campaigns — adding campaign_end_date column');
+    await conn.query('ALTER TABLE campaigns ADD COLUMN campaign_end_date DATE NULL DEFAULT NULL');
+  }
+  if (!(await hasColumn('campaigns', 'daily_limit_per_instance'))) {
+    console.log('MIGRATE: campaigns — adding daily_limit_per_instance column');
+    await conn.query('ALTER TABLE campaigns ADD COLUMN daily_limit_per_instance INT NULL DEFAULT NULL');
+  }
+  if (!(await hasColumn('campaigns', 'is_multi_instance'))) {
+    console.log('MIGRATE: campaigns — adding is_multi_instance column');
+    await conn.query('ALTER TABLE campaigns ADD COLUMN is_multi_instance TINYINT(1) NOT NULL DEFAULT 0');
+  }
+}
+
+async function ensureCampaignContactsAssignmentColumn(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'campaign_contacts' AND COLUMN_NAME = 'assigned_instance_id'`,
+    [schema],
+  );
+  if (Number(rows[0]?.cnt) === 0) {
+    console.log('MIGRATE: campaign_contacts — adding assigned_instance_id column');
+    await conn.query(
+      'ALTER TABLE campaign_contacts ADD COLUMN assigned_instance_id VARCHAR(50) NULL DEFAULT NULL',
+    );
+  }
+}
+
+module.exports = { runCoreMigrations };
+
+if (require.main === module) {
+  runCoreMigrations().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}

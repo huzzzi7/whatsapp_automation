@@ -12,6 +12,15 @@ import { DEFAULT_CAMPAIGN_TEMPLATE_STRINGS } from '../utils/campaignTemplates';
 
 const TOTAL_STEPS = 4;
 
+function todayPlusDaysIso(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export default function CampaignWizardPage() {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(1);
@@ -21,6 +30,13 @@ export default function CampaignWizardPage() {
     campaignSettings: {
       batchSize: 10,
       templates: [...DEFAULT_CAMPAIGN_TEMPLATE_STRINGS],
+      operationalAnchors: '1,5',
+      operationalDays: '1,2,3,4,5',
+      campaignEndDate: todayPlusDaysIso(7),
+      operationalStart: '09:00',
+      operationalEnd: '21:00',
+      instanceMode: 'auto',
+      selectedInstanceId: '',
     },
     testState: {
       status: 'idle',
@@ -45,10 +61,15 @@ export default function CampaignWizardPage() {
       .then((list) => {
         setInstances(list);
         setWizardData((prev) => {
-          if (prev.selectedInstanceId && list.some((i) => i.id === prev.selectedInstanceId)) return prev;
+          const selected = prev.campaignSettings?.selectedInstanceId || prev.selectedInstanceId;
+          if (selected && list.some((i) => i.id === selected)) return prev;
           return {
             ...prev,
-            selectedInstanceId: list[0]?.id || '',
+            selectedInstanceId: prev.selectedInstanceId || '',
+            campaignSettings: {
+              ...prev.campaignSettings,
+              selectedInstanceId: list[0]?.id || '',
+            },
           };
         });
       })
@@ -87,11 +108,10 @@ export default function CampaignWizardPage() {
 
   const nextStep = () => {
     if (currentStep === 1) {
-      const hasInstance = Boolean(wizardData.selectedInstanceId);
       const users = wizardData.uploadResult?.users;
       const hasUsers = Array.isArray(users) && users.length > 0;
-      if (!hasInstance || !hasUsers) {
-        setStepError('Please select instance and upload a valid file');
+      if (!hasUsers) {
+        setStepError('Please upload a valid file');
         return;
       }
     }
@@ -102,17 +122,42 @@ export default function CampaignWizardPage() {
         Array.isArray(templates) && templates.length >= 1 && String(templates[0] ?? '').trim();
       const batchNum = Number(cs.batchSize);
       const batchOk = Number.isFinite(batchNum) && Math.floor(batchNum) >= 1;
-      if (!hasTemplates || !batchOk) {
-        setStepError('Please configure valid campaign settings');
+      const mode = cs?.instanceMode === 'manual' ? 'manual' : 'auto';
+      const manualOk = mode === 'manual' ? Boolean(String(cs?.selectedInstanceId || '').trim()) : true;
+      const startOk = /^\d{2}:\d{2}$/.test(String(cs?.operationalStart || ''));
+      const endOk = /^\d{2}:\d{2}$/.test(String(cs?.operationalEnd || ''));
+      const endGt = String(cs?.operationalEnd || '') > String(cs?.operationalStart || '');
+      const daysOk = Boolean(String(cs?.operationalDays || '').trim());
+      if (!hasTemplates) {
+        setStepError('Add at least one message (Message 1 cannot be empty).');
+        return;
+      }
+      if (!batchOk) {
+        setStepError('Users per batch must be at least 1.');
+        return;
+      }
+      if (!daysOk) {
+        setStepError('Select at least one operational day.');
+        return;
+      }
+      if (!startOk || !endOk) {
+        setStepError('Operational times must be in HH:MM format.');
+        return;
+      }
+      if (!endGt) {
+        setStepError('Operational end time must be after start time.');
+        return;
+      }
+      if (!manualOk) {
+        setStepError('Choose a WhatsApp instance (manual mode).');
         return;
       }
     }
     if (currentStep === 3) {
-      const hasInstance = Boolean(wizardData.selectedInstanceId);
       const users = wizardData.uploadResult?.users;
       const hasUsers = Array.isArray(users) && users.length > 0;
-      if (!hasInstance || !hasUsers) {
-        setStepError('Please select instance and upload a valid file');
+      if (!hasUsers) {
+        setStepError('Please upload a valid file');
         return;
       }
     }
@@ -164,6 +209,10 @@ export default function CampaignWizardPage() {
       ...prev,
       selectedInstanceId: id,
       uploadResult: null,
+      campaignSettings: {
+        ...prev.campaignSettings,
+        selectedInstanceId: id,
+      },
     }));
     setUploadSuccess('');
     setStepError('');
@@ -214,9 +263,6 @@ export default function CampaignWizardPage() {
               onError={handleUploadError}
               disabled={false}
               showCampaignSettingsButton={false}
-              instances={instances}
-              selectedInstanceId={wizardData.selectedInstanceId}
-              onSelectInstance={setSelectedInstanceId}
             />
             {uploadError ? <div className="alert-error">{uploadError}</div> : null}
             {uploadSuccess ? <div className="alert-success">{uploadSuccess}</div> : null}
@@ -246,7 +292,9 @@ export default function CampaignWizardPage() {
                   campaignSettings: updated,
                 }));
               }}
+              instances={instances}
               error={stepError || undefined}
+              totalContacts={wizardData.uploadResult?.totalUsers ?? wizardData.uploadResult?.users?.length ?? 0}
             />
           </>
         ) : currentStep === 3 ? (
@@ -274,7 +322,7 @@ export default function CampaignWizardPage() {
         ) : currentStep === 4 ? (
           <CampaignReviewStep
             uploadResult={wizardData.uploadResult}
-            selectedInstanceId={wizardData.selectedInstanceId}
+            selectedInstanceId={wizardData.campaignSettings?.selectedInstanceId || wizardData.selectedInstanceId}
             instances={instances}
             campaignName={campaignName}
             campaignSettings={wizardData.campaignSettings}
@@ -338,9 +386,7 @@ export default function CampaignWizardPage() {
               disabled={
                 !isNameValid ||
                 (currentStep === 1 &&
-                  (!wizardData.selectedInstanceId ||
-                    !Array.isArray(wizardData.uploadResult?.users) ||
-                    wizardData.uploadResult.users.length === 0))
+                  (!Array.isArray(wizardData.uploadResult?.users) || wizardData.uploadResult.users.length === 0))
               }
             >
               Next

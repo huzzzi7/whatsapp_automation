@@ -6,6 +6,7 @@ const pool = require('../mysql');
 const { toChatId } = require('../phone');
 const { resolveGreenApiConfig } = require('../greenInstance');
 const { enqueueMessage } = require('../queues/enqueueMessage');
+const { replyQueue, messageQueue } = require('../queues');
 const { logger } = require('../utils/logger');
 const {
   listEligibleForFollowup,
@@ -15,6 +16,7 @@ const { insertQueuedJob, markEnqueued } = require('../repositories/followupRepos
 
 const FOLLOWUP_STEP_DELAYS_HOURS = [6, 24, 48];
 const FOLLOWUP_BATCH_LIMIT = Math.max(1, Math.floor(Number(process.env.FOLLOWUP_BATCH_LIMIT || '50') || 50));
+const MAX_REPLY_QUEUE_SCAN = 200;
 
 const FOLLOWUP_MESSAGES = {
   1: [
@@ -53,6 +55,37 @@ async function loadGreenInstanceRow(greenInstanceDbId) {
   return rows[0] || null;
 }
 
+async function hasPendingOutboundJob(greenInstanceDbId, phoneDigits) {
+  try {
+    const gid = String(greenInstanceDbId || '').trim();
+    const phone = String(phoneDigits || '').trim();
+    if (!gid || !phone) return false;
+
+    async function checkQueue(queue) {
+      const counts = await queue.getJobCounts('waiting', 'delayed', 'active');
+      const total = (counts.waiting || 0) + (counts.delayed || 0) + (counts.active || 0);
+      if (total === 0) return false;
+
+      // Conservative: if queue is busy, skip followups to avoid flooding.
+      if (total > MAX_REPLY_QUEUE_SCAN) return true;
+
+      const jobs = await queue.getJobs(['waiting', 'delayed', 'active'], 0, MAX_REPLY_QUEUE_SCAN - 1);
+      return jobs.some((j) => {
+        const jd = j && j.data ? j.data : {};
+        const jGid = jd.greenInstanceDbId != null ? String(jd.greenInstanceDbId).trim() : '';
+        const jPhone = jd.phoneDigits != null ? String(jd.phoneDigits).trim() : '';
+        return jGid === gid && jPhone === phone;
+      });
+    }
+
+    const [inReply, inMessage] = await Promise.all([checkQueue(replyQueue), checkQueue(messageQueue)]);
+    return Boolean(inReply || inMessage);
+  } catch (err) {
+    logger.warn({ event: 'followup_reply_queue_scan_failed', err: err?.message || String(err) }, 'followup_reply_queue_scan_failed');
+    return false;
+  }
+}
+
 async function runFollowupSchedulerTick() {
   const now = new Date();
   const eligible = await listEligibleForFollowup({ now, limit: FOLLOWUP_BATCH_LIMIT });
@@ -82,6 +115,15 @@ async function runFollowupSchedulerTick() {
       const greenApi = resolveGreenApiConfig(instRow);
       const chatId = toChatId(phone);
       if (!chatId) continue;
+
+      const outboundPending = await hasPendingOutboundJob(gid, phone);
+      if (outboundPending) {
+        logger.info(
+          { event: 'followup_skipped_outbound_pending', greenInstanceDbId: gid, phoneNormalized: phone },
+          'followup_skipped: outbound already pending for this contact',
+        );
+        continue;
+      }
 
       const jobRow = await insertQueuedJob({
         greenInstanceDbId: gid,

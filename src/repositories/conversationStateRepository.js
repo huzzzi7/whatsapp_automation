@@ -207,12 +207,26 @@ async function upsertState(instanceId, phone, data) {
   }
 }
 
-async function updateOutboundMeta(greenInstanceDbId, phoneNormalized, { lastOutboundAt }) {
+async function updateOutboundMeta(greenInstanceDbId, phoneNormalized, opts) {
   const gid = String(greenInstanceDbId || '').trim();
   const p = String(phoneNormalized || '').trim();
   if (!gid || !p) return;
-  const ms = Number(lastOutboundAt);
+  const ms = Number(opts?.lastOutboundAt);
   const dt = Number.isFinite(ms) ? new Date(ms) : null;
+  const hasFollowupNextAt = Object.prototype.hasOwnProperty.call(opts || {}, 'followupNextAt');
+  const nextMs = Number(opts?.followupNextAt);
+  const nextDt = hasFollowupNextAt && Number.isFinite(nextMs) ? new Date(nextMs) : null;
+
+  if (hasFollowupNextAt) {
+    await pool.execute(
+      `UPDATE conversation_state
+       SET last_outbound_at = ?, followup_next_at = ?, updated_at = NOW(3)
+       WHERE green_instance_db_id = ? AND phone_normalized = ?`,
+      [dt, nextDt, gid, p],
+    );
+    return;
+  }
+
   await pool.execute(
     `UPDATE conversation_state
      SET last_outbound_at = ?, updated_at = NOW(3)

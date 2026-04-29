@@ -14,6 +14,18 @@ const { updateOutboundMeta } = require('./repositories/conversationStateReposito
 const inFlightMap = new Map();
 const logWebhook = createLogger('webhook');
 
+function sleepMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, n));
+}
+
+function getCampaignInterMessageDelayMs() {
+  const raw = parseInt(process.env.CAMPAIGN_INTER_MESSAGE_DELAY_MS || '20000', 10);
+  if (!Number.isFinite(raw) || raw < 0) return 20000;
+  return raw;
+}
+
 function buildInFlightKey(instanceId, phone, index) {
   return `${instanceId}:${phone}:${index}`;
 }
@@ -206,7 +218,7 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
   campLog.debug({ event: 'campaign_first_message_concurrency', concurrency: SEND_FIRST_MESSAGE_CONCURRENCY }, 'first_message_concurrency');
   let batchPaused = false;
 
-  await runWithConcurrency(list, SEND_FIRST_MESSAGE_CONCURRENCY, async (user) => {
+  await runWithConcurrency(list, SEND_FIRST_MESSAGE_CONCURRENCY, async (user, idx) => {
     if (batchPaused) return;
     if (typeof pauseCheck === 'function') {
       const shouldPause = await pauseCheck();
@@ -250,20 +262,29 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
       campaignId,
     });
     if (sendResult.ok) {
+      const now = Date.now();
+      const followupNextAt = now + 6 * 60 * 60 * 1000;
       store.setState(greenInstanceDbId, phoneDigits, {
         lastSentIndex: 1,
         sequence,
         campaignId,
-        lastOutboundAt: Date.now(),
+        lastOutboundAt: now,
+        followupNextAt,
         status: 'active',
       });
       try {
-        await updateOutboundMeta(greenInstanceDbId, phoneDigits, { lastOutboundAt: Date.now() });
+        await updateOutboundMeta(greenInstanceDbId, phoneDigits, { lastOutboundAt: now, followupNextAt });
       } catch (err) {
         logger.warn('[ReplyFlow] updateOutboundMeta failed (non-fatal):', err.message);
       }
       startedUsers += 1;
       sentPhoneDigits.push(phoneDigits);
+
+      // Stagger campaign dispatch so enqueue doesn't flood instantly (3/min pacing).
+      // Only apply to real campaigns (not tests) and not after the last item.
+      if (campaignId.startsWith('campaign-') && idx < list.length - 1) {
+        await sleepMs(getCampaignInterMessageDelayMs());
+      }
     } else if (sendResult.error) {
       failedSends[phoneDigits] = sendResult.error;
     }

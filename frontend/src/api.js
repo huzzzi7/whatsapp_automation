@@ -125,17 +125,22 @@ export async function createCampaignContact(payload) {
   return data;
 }
 
-/** @param {string} greenInstanceId - green_instances.id */
-export async function startCampaign(users, greenInstanceId, batchSize, scheduledAt, name) {
+export async function startCampaign(users, options = {}) {
+  const body = {
+    users,
+    name: options?.name,
+    batchSize: options?.batchSize,
+    operationalStart: options?.operationalStart,
+    operationalEnd: options?.operationalEnd,
+    operationalDays: options?.operationalDays,
+    campaignEndDate: options?.campaignEndDate,
+    ...(options?.scheduledAt != null && String(options.scheduledAt).trim() !== '' ? { scheduledAt: options.scheduledAt } : {}),
+  };
+  const gid = options?.greenInstanceId != null ? String(options.greenInstanceId).trim() : '';
+  if (gid) body.greenInstanceId = gid;
   return apiFetch('/api/campaign/start', {
     method: 'POST',
-    body: JSON.stringify({
-      users,
-      greenInstanceId,
-      name,
-      batchSize,
-      ...(scheduledAt != null && String(scheduledAt).trim() !== '' ? { scheduledAt } : {}),
-    }),
+    body: JSON.stringify(body),
   });
 }
 

@@ -14,11 +14,28 @@ const {
 } = require('../services/greenQueueMonitor');
 const { getLocalQueueDepth, getLocalQueueMax } = require('../services/localQueueMonitor');
 const warmupRepository = require('../repositories/warmupRepository');
+const { startWarmupSession } = require('../services/WarmupCoordinator');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('worker');
 
 async function processWarmupJob(job, token) {
+  if (job && (job.name === 'warmup_morning' || job.name === 'warmup_evening')) {
+    const jobLog = log.child({ bullJobId: String(job.id), name: job.name, queue: job.queueName });
+    jobLog.info({ event: 'warmup_schedule_tick', name: job.name }, 'warmup_schedule_tick');
+    try {
+      const result = await startWarmupSession();
+      jobLog.info(
+        { event: 'warmup_schedule_started', alreadyRunning: Boolean(result?.alreadyRunning) },
+        'warmup_schedule_started',
+      );
+    } catch (err) {
+      jobLog.error({ event: 'warmup_schedule_error', err: err?.message || String(err) }, 'warmup_schedule_error');
+      throw err;
+    }
+    return { ok: true };
+  }
+
   const {
     instanceId,
     apiToken,

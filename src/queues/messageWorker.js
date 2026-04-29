@@ -6,6 +6,7 @@
 const { Worker, DelayedError } = require('bullmq');
 const { bullMqConnection, bullMqSkipVersionCheck, maskRedisHostForLog } = require('./connection');
 const { controlledSend } = require('../services/controlledSend');
+const { waitForRateLimit, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } = require('../utils/instanceRateLimiter');
 const {
   getGreenQueueDepth,
   getGreenQueueMax,
@@ -127,6 +128,10 @@ async function processMessageJob(job, token) {
     if (err.name === 'DelayedError' || err instanceof DelayedError) throw err;
     log.warn({ err: err.message, bullJobId: String(job.id), event: 'green_queue_check_failed' }, 'Green queue check failed');
   }
+
+  jobLog.debug({ event: 'rate_limit_wait_start', instanceId }, 'rate_limit_wait_start');
+  await waitForRateLimit(instanceId, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
+  jobLog.debug({ event: 'rate_limit_wait_done', instanceId }, 'rate_limit_wait_done');
 
   let result;
   try {

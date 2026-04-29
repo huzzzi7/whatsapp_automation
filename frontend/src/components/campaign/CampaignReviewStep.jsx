@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Button from '../ui/Button';
-import { startCampaign, getCampaignStatus, logCampaign } from '../../api';
+import { startCampaign, getCampaignStatus, logCampaign, listGreenInstances } from '../../api';
 import { applyTemplatesToUploadResult } from '../../utils/campaignTemplates';
 import { buildCampaignLogPayload } from '../../utils/campaignLog';
 import {
@@ -51,15 +51,79 @@ export default function CampaignReviewStep({
     [uploadResult, campaignSettings?.templates],
   );
 
+  const [instanceCount, setInstanceCount] = useState(instances?.length || 0);
+
+  useEffect(() => {
+    if (instanceCount > 0) return;
+    listGreenInstances()
+      .then((list) => setInstanceCount(Array.isArray(list) ? list.length : 0))
+      .catch(() => setInstanceCount(0));
+  }, [instanceCount]);
+
+  const instanceMode = campaignSettings?.instanceMode === 'manual' ? 'manual' : 'auto';
+  const manualInstanceId = campaignSettings?.selectedInstanceId || selectedInstanceId || '';
+  const operationalDays = String(campaignSettings?.operationalDays || '1,2,3,4,5');
+  const operationalStart = String(campaignSettings?.operationalStart || '09:00');
+  const operationalEnd = String(campaignSettings?.operationalEnd || '21:00');
+  const campaignEndDate = String(campaignSettings?.campaignEndDate || '');
+
+  function parseDaysSet(str) {
+    const set = new Set();
+    for (const part of String(str || '').split(',').map((s) => s.trim()).filter(Boolean)) {
+      const n = Number(part);
+      if (Number.isFinite(n) && n >= 0 && n <= 6) set.add(n);
+    }
+    return set.size ? set : new Set([1, 2, 3, 4, 5]);
+  }
+
+  function fmtOperationalDaysHuman(mask) {
+    const days = parseDaysSet(mask);
+    const hasMonFri = [1, 2, 3, 4, 5].every((d) => days.has(d)) && days.size === 5;
+    if (hasMonFri) return 'Mon – Fri';
+    const labels = { 0: 'Sun', 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat' };
+    return Array.from(days.values())
+      .sort((a, b) => a - b)
+      .map((d) => labels[d] || String(d))
+      .join(', ');
+  }
+
+  function remainingOperationalDaysCount(mask, endIso) {
+    if (!endIso || !/^\d{4}-\d{2}-\d{2}$/.test(endIso)) return 1;
+    const days = parseDaysSet(mask);
+    const now = new Date();
+    const end = new Date(`${endIso}T23:59:59Z`);
+    if (Number.isNaN(end.getTime())) return 1;
+    let cnt = 0;
+    for (let i = 0; i <= 366; i += 1) {
+      const d = new Date(now.getTime());
+      d.setDate(d.getDate() + i);
+      const dayUtc = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+      if (dayUtc.getTime() > end.getTime()) break;
+      const jsDow = dayUtc.getUTCDay(); // 0..6, close enough for estimate
+      if (days.has(jsDow)) cnt += 1;
+    }
+    return Math.max(1, cnt);
+  }
+
+  const estimatedDailyPerInstance = useMemo(() => {
+    const total = Number(uploadResult?.totalUsers ?? uploadResult?.users?.length ?? 0) || 0;
+    const remainingDays = remainingOperationalDaysCount(operationalDays, campaignEndDate);
+    const totalDaily = Math.ceil(total / remainingDays);
+    if (instanceMode === 'manual') return Math.max(1, totalDaily);
+    const n = instanceCount > 0 ? instanceCount : 1;
+    return Math.max(1, Math.ceil(totalDaily / n));
+  }, [uploadResult, operationalDays, campaignEndDate, instanceMode, instanceCount]);
+
   const isNameValid = useMemo(
     () => Boolean(campaignName != null && String(campaignName).trim().length > 0),
     [campaignName],
   );
 
   const instanceName = useMemo(() => {
-    const row = instances?.find((i) => i.id === selectedInstanceId);
-    return row?.name || selectedInstanceId || '—';
-  }, [instances, selectedInstanceId]);
+    const id = instanceMode === 'manual' ? manualInstanceId : selectedInstanceId;
+    const row = instances?.find((i) => i.id === id);
+    return row?.name || id || '—';
+  }, [instances, selectedInstanceId, instanceMode, manualInstanceId]);
 
   const closeScheduleModal = useCallback(() => {
     setScheduleOpen(false);
@@ -76,7 +140,7 @@ export default function CampaignReviewStep({
     async (scheduledAtIso) => {
       setStartError('');
       loggedRef.current = false;
-      if (!selectedInstanceId) {
+      if (instanceMode === 'manual' && !manualInstanceId) {
         setStartError('Select a WhatsApp instance.');
         return false;
       }
@@ -95,13 +159,16 @@ export default function CampaignReviewStep({
       setStarting(true);
       try {
         const trimmedName = cleanName;
-        const data = await startCampaign(
-          users,
-          selectedInstanceId,
-          campaignSettings.batchSize,
-          scheduledAtIso,
-          trimmedName,
-        );
+        const data = await startCampaign(users, {
+          greenInstanceId: instanceMode === 'manual' ? manualInstanceId : null,
+          name: trimmedName,
+          batchSize: campaignSettings.batchSize,
+          scheduledAt: scheduledAtIso,
+          operationalStart,
+          operationalEnd,
+          operationalDays,
+          campaignEndDate,
+        });
         if (!data?.ok || !data.jobId) {
           setStartError(data?.error || 'Campaign start failed.');
           return false;
@@ -120,7 +187,19 @@ export default function CampaignReviewStep({
         setStarting(false);
       }
     },
-    [mergedUpload, selectedInstanceId, campaignSettings, campaignName, onCampaignStart],
+    [
+      mergedUpload,
+      selectedInstanceId,
+      campaignSettings,
+      campaignName,
+      onCampaignStart,
+      instanceMode,
+      manualInstanceId,
+      operationalStart,
+      operationalEnd,
+      operationalDays,
+      campaignEndDate,
+    ],
   );
 
   const handleStart = useCallback(() => {
@@ -261,8 +340,16 @@ export default function CampaignReviewStep({
         }}
       >
         <p style={{ margin: '0 0 0.5rem' }}>
-          <strong>Instance</strong>: {instanceName}
+          <strong>Instance Mode</strong>:{' '}
+          {instanceMode === 'manual'
+            ? `Manual: ${instanceName}`
+            : `Auto (${instanceCount ? `${instanceCount} instances` : 'all instances'})`}
         </p>
+        {instanceMode === 'manual' ? (
+          <p style={{ margin: '0 0 0.5rem' }}>
+            <strong>Instance</strong>: {instanceName}
+          </p>
+        ) : null}
         <p style={{ margin: '0 0 0.5rem' }}>
           <strong>Total users</strong>: {totalRecipients}
         </p>
@@ -274,6 +361,16 @@ export default function CampaignReviewStep({
         </p>
         <p style={{ margin: '0 0 0.5rem' }}>
           <strong>Batch size</strong>: {campaignSettings?.batchSize ?? '—'}
+        </p>
+        <p style={{ margin: '0 0 0.5rem' }}>
+          <strong>Operational Days</strong>: {fmtOperationalDaysHuman(operationalDays)}
+        </p>
+        <p style={{ margin: '0 0 0.5rem' }}>
+          <strong>Daily window</strong>: {operationalStart} – {operationalEnd} (London)
+        </p>
+        <p style={{ margin: '0 0 0.5rem' }}>
+          <strong>Est. daily messages per instance</strong>:{' '}
+          ~{estimatedDailyPerInstance} messages/instance/day
         </p>
         <p style={{ margin: '0 0 0.5rem' }}>
           <strong>Message 1 preview</strong>: {firstTemplate ? String(firstTemplate) : '—'}

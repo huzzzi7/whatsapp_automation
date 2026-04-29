@@ -10,6 +10,7 @@ const { closeCoordinatorWorker } = require('./src/queues/coordinatorWorker');
 const { closeWarmupWorker } = require('./src/queues/warmupWorker');
 const { registerCoordinatorJob } = require('./src/queues/registerCoordinatorJob');
 const { registerFollowupSchedulerJob } = require('./src/queues/registerFollowupSchedulerJob');
+const { registerWarmupScheduleJobs } = require('./src/queues/registerWarmupScheduleJobs');
 const express = require('express');
 const session = require('express-session');
 const MySQLStore = require('express-mysql-session')(session);
@@ -53,6 +54,7 @@ const {
   listCampaignContactsPage,
   updateCampaignStatus,
   deleteCampaignById,
+  updateContactInstanceAssignment,
 } = require('./src/repositories/campaignRepository');
 const { tryRunNext } = require('./src/services/CampaignCoordinator');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
@@ -748,9 +750,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded.' });
     }
     const greenInstanceDbId = String(req.body?.greenInstanceId || '').trim();
-    if (!greenInstanceDbId) {
-      return res.status(400).json({ error: 'greenInstanceId is required (select an instance).' });
-    }
     const mimetype = (req.file.mimetype || '').toLowerCase();
     const name = (req.file.originalname || '').toLowerCase();
     const isXlsx =
@@ -761,12 +760,14 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Only .xlsx files are allowed.' });
     }
 
-    const [instRows2] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
-      greenInstanceDbId,
-    ]);
-    const inst = instRows2[0];
-    if (!inst) {
-      return res.status(400).json({ error: 'Invalid greenInstanceId.' });
+    if (greenInstanceDbId) {
+      const [instRows2] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
+        greenInstanceDbId,
+      ]);
+      const inst = instRows2[0];
+      if (!inst) {
+        return res.status(400).json({ error: 'Invalid greenInstanceId.' });
+      }
     }
 
     let users;
@@ -943,25 +944,60 @@ app.get('/api/campaign/stats', async (req, res) => {
 //
 app.post('/api/campaign/start', async (req, res) => {
   const body = req.body || {};
-  const { users: bodyUsers, greenInstanceId, batchSize, scheduledAt: rawScheduledAt } = body;
-  const campaignName =
-    body.name && String(body.name).trim() ? String(body.name).trim() : null;
+  const {
+    users: bodyUsers,
+    greenInstanceId,
+    batchSize,
+    scheduledAt: rawScheduledAt,
+    operationalStart: rawOperationalStart,
+    operationalEnd: rawOperationalEnd,
+    operationalDays: rawOperationalDays,
+    campaignEndDate: rawCampaignEndDate,
+  } = body;
+  const campaignName = body.name && String(body.name).trim() ? String(body.name).trim() : null;
   if (!bodyUsers || !Array.isArray(bodyUsers) || bodyUsers.length === 0) {
     return res.status(400).json({
       ok: false,
       error: 'Missing or empty users array.',
     });
   }
-  const gid = String(greenInstanceId || '').trim();
-  if (!gid) {
-    return res.status(400).json({ ok: false, error: 'greenInstanceId is required.' });
+
+  const envOpStart = String(process.env.CAMPAIGN_OPERATIONAL_START || '09:00').trim() || '09:00';
+  const envOpEnd = String(process.env.CAMPAIGN_OPERATIONAL_END || '21:00').trim() || '21:00';
+  const operationalStart = rawOperationalStart != null && String(rawOperationalStart).trim() !== '' ? String(rawOperationalStart).trim() : envOpStart;
+  const operationalEnd = rawOperationalEnd != null && String(rawOperationalEnd).trim() !== '' ? String(rawOperationalEnd).trim() : envOpEnd;
+  const operationalDays =
+    rawOperationalDays != null && String(rawOperationalDays).trim() !== ''
+      ? String(rawOperationalDays).trim()
+      : '1,2,3,4,5';
+
+  function hhmmToMinutes(hhmm) {
+    const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || '').trim());
+    if (!m) return null;
+    return Number(m[1]) * 60 + Number(m[2]);
   }
+
+  function toIsoDateString(d) {
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  let campaignEndDate = null;
+  if (rawCampaignEndDate != null && String(rawCampaignEndDate).trim() !== '') {
+    const d = new Date(String(rawCampaignEndDate).trim());
+    if (!Number.isNaN(d.getTime())) campaignEndDate = toIsoDateString(d);
+  }
+  if (!campaignEndDate) {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() + 7);
+    campaignEndDate = toIsoDateString(d);
+  }
+
   try {
-    const [campRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
-    const row = campRows[0];
-    if (!row) {
-      return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
-    }
+    const { getAvailableInstances, calculateDailyLimit } = require('./src/services/instanceLoadBalancer');
+    const { getActiveCampaignsDailyLoad } = require('./src/repositories/campaignRepository');
 
     const safeBatchSize = Math.max(1, Math.floor(Number(batchSize) || 20));
     const campaignId = uuidv4();
@@ -973,15 +1009,80 @@ app.post('/api/campaign/start', async (req, res) => {
       if (!Number.isNaN(d.getTime())) scheduleDate = d;
     }
 
+    const gid = String(greenInstanceId || '').trim();
+    let isMultiInstance = false;
+    let instances = [];
+    let dailyLimitPerInstance = null;
+    let chosenCampaignInstanceId = gid || null;
+
+    if (gid) {
+      const [campRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
+      const row = campRows[0];
+      if (!row) {
+        return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
+      }
+      instances = [row];
+      isMultiInstance = false;
+      dailyLimitPerInstance = null;
+      chosenCampaignInstanceId = gid;
+    } else {
+      instances = await getAvailableInstances();
+      if (!instances.length) {
+        return res.status(400).json({ ok: false, error: 'No WhatsApp instances configured' });
+      }
+      isMultiInstance = true;
+      chosenCampaignInstanceId = String(instances[0].id || '').trim();
+      dailyLimitPerInstance = await calculateDailyLimit(
+        bodyUsers.length,
+        instances,
+        new Date(campaignEndDate),
+        operationalDays,
+        operationalEnd,
+      );
+    }
+
     await createCampaign({
       id: campaignId,
-      greenInstanceId: gid,
+      greenInstanceId: chosenCampaignInstanceId,
       name: campaignName,
       batchSize: safeBatchSize,
       totalContacts: bodyUsers.length,
       queueOrder,
       scheduledAt: scheduleDate,
+      operationalStart,
+      operationalEnd,
+      operationalDays,
+      campaignEndDate,
+      dailyLimitPerInstance,
+      isMultiInstance,
     });
+
+    // Adjust daily limit for overlap with existing campaigns on same instances
+    if (isMultiInstance && dailyLimitPerInstance != null) {
+      const maxRatePerMin = parseInt(process.env.RATE_LIMIT_MESSAGES_PER_WINDOW || '3', 10);
+      const windowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10);
+      const opStartMins = hhmmToMinutes(operationalStart) ?? 9 * 60;
+      const opEndMins = hhmmToMinutes(operationalEnd) ?? 21 * 60;
+      const operationalMinutesPerDay = Math.max(1, opEndMins - opStartMins);
+      // Max messages one instance can physically send in operational window
+      const physicalMaxPerInstancePerDay = Math.floor(
+        (operationalMinutesPerDay / (windowMs / 60000)) * maxRatePerMin,
+      );
+
+      let maxExistingLoad = 0;
+      for (const inst of instances) {
+        const existingLoad = await getActiveCampaignsDailyLoad(campaignId, String(inst.id));
+        if (existingLoad > maxExistingLoad) maxExistingLoad = existingLoad;
+      }
+      const availableCapacity = Math.max(1, physicalMaxPerInstancePerDay - maxExistingLoad);
+      // Cap our daily limit to available capacity
+      dailyLimitPerInstance = Math.min(dailyLimitPerInstance, availableCapacity);
+      // Update the campaign row with adjusted limit
+      await pool.execute('UPDATE campaigns SET daily_limit_per_instance = ? WHERE id = ?', [
+        dailyLimitPerInstance,
+        campaignId,
+      ]);
+    }
 
     const inserted = await insertCampaignContacts(campaignId, bodyUsers);
     if (inserted === 0) {
@@ -993,11 +1094,37 @@ app.post('/api/campaign/start', async (req, res) => {
     }
     await setTotalContacts(campaignId, inserted);
 
+    // Assign every contact to an instance (single-instance assigns all to the chosen instance)
+    if (isMultiInstance) {
+      const [contactRows] = await pool.execute(
+        'SELECT id FROM campaign_contacts WHERE campaign_id = ? ORDER BY sort_order ASC, id ASC',
+        [campaignId],
+      );
+      const instIds = instances.map((r) => String(r.id || '').trim()).filter(Boolean);
+      const instanceCount = instIds.length;
+      for (let i = 0; i < contactRows.length; i += 1) {
+        const contactId = contactRows[i]?.id;
+        const assigned = instIds[i % instanceCount];
+        await updateContactInstanceAssignment(contactId, assigned);
+      }
+    } else {
+      await pool.execute('UPDATE campaign_contacts SET assigned_instance_id = ? WHERE campaign_id = ?', [
+        chosenCampaignInstanceId,
+        campaignId,
+      ]);
+    }
+
     tryRunNext().catch((err) => {
       console.error('[Campaign coordinator]', err);
     });
 
-    res.json({ ok: true, campaignId, jobId: campaignId });
+    res.json({
+      ok: true,
+      campaignId,
+      jobId: campaignId,
+      instanceCount: instances.length,
+      dailyLimitPerInstance,
+    });
   } catch (err) {
     console.error('[Campaign]', err);
     res.status(500).json({
@@ -1585,18 +1712,41 @@ app.listen(PORT, '0.0.0.0', () => {
   }
   // messageWorker is required at file top (with closeWorkers); do not re-require here.
   logger.info({ event: 'bullmq_workers_start_confirmed' }, 'BullMQ message workers bound at process start');
-  // Task 3.4 — BullMQ coordinator replaces setInterval
-  require('./src/queues/coordinatorWorker');
-  registerCoordinatorJob().catch((err) =>
-    logger.error({ err: err.message, event: 'coordinator_register_failed' }, 'Failed to register coordinator job'),
-  );
-  registerFollowupSchedulerJob().catch((err) =>
-    logger.error('[Server] registerFollowupSchedulerJob failed:', err),
-  );
-  logger.info(
-    { event: 'bullmq_coordinator_registered', coordinatorTickMs: parseInt(process.env.COORDINATOR_TICK_MS || '15000', 10) || 15000 },
-    'BullMQ coordinator tick registered (see COORDINATOR_TICK_MS)',
-  );
+  const { runCoreMigrations } = require('./scripts/ensure-core-tables');
+
+  const startQueueRegistrations = () => {
+    // Task 3.4 — BullMQ coordinator replaces setInterval
+    require('./src/queues/coordinatorWorker');
+    registerCoordinatorJob().catch((err) =>
+      logger.error({ err: err.message, event: 'coordinator_register_failed' }, 'Failed to register coordinator job'),
+    );
+    registerFollowupSchedulerJob().catch((err) =>
+      logger.error('[Server] registerFollowupSchedulerJob failed:', err),
+    );
+    registerWarmupScheduleJobs().catch((err) =>
+      logger.error({ err: err?.message || String(err), event: 'warmup_schedule_register_failed' }, 'warmup schedule register failed'),
+    );
+    logger.info(
+      {
+        event: 'bullmq_coordinator_registered',
+        coordinatorTickMs: parseInt(process.env.COORDINATOR_TICK_MS || '15000', 10) || 15000,
+      },
+      'BullMQ coordinator tick registered (see COORDINATOR_TICK_MS)',
+    );
+  };
+
+  runCoreMigrations()
+    .then(() => {
+      logger.info('DB migrations verified');
+      startQueueRegistrations();
+    })
+    .catch((err) => {
+      logger.error(
+        { err: err?.message || String(err) },
+        'DB migration failed — some columns may be missing',
+      );
+      startQueueRegistrations();
+    });
 });
 
 process.on('SIGTERM', async () => {
