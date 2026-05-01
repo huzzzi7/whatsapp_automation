@@ -135,6 +135,13 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 },
 });
 
+app.get('/api/config', (req, res) => {
+  res.json({
+    rateLimitMessagesPerWindow: parseInt(process.env.RATE_LIMIT_MESSAGES_PER_WINDOW || '3', 10),
+    rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10),
+  });
+});
+
 // Webhook: preferred URL — POST /api/webhook/greenapi/<green_instances.id>
 app.post(
   '/api/webhook/greenapi/:greenInstanceDbId',

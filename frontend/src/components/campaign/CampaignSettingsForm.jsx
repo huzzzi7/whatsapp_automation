@@ -134,6 +134,8 @@ export default function CampaignSettingsForm({
   firstMessageFieldRef,
   instances = [],
   totalContacts = 0,
+  instanceCount = 1,
+  rateConfig = { rateLimitMessagesPerWindow: 3, rateLimitWindowMs: 60000 },
 }) {
   const templates = Array.isArray(value?.templates) ? value.templates : [];
   const batchSize = value?.batchSize ?? 20;
@@ -252,6 +254,9 @@ export default function CampaignSettingsForm({
     if (e.includes('message') || e.includes('Message')) return { templates: e };
     if (e.includes('batch')) return { batchSize: e };
     if (e.includes('day') || e.includes('Day')) return { days: e };
+    if (e.includes('time slot') || e.includes('minimum required') || e.includes('Extend your')) {
+      return { time: e };
+    }
     if (
       e.includes('start time') ||
       e.includes('end time') ||
@@ -265,18 +270,49 @@ export default function CampaignSettingsForm({
     return { general: e };
   }, [error]);
 
-  const estimatedCompletion = useMemo(() => {
+  const { estimatedCompletion, minHoursRequired } = useMemo(() => {
     const contacts = Math.max(0, Math.floor(Number(totalContacts) || 0));
-    if (contacts === 0) return null;
+    const seqLen = Math.max(1, templates.length || 1);
+    const instCount = Math.max(1, Math.floor(Number(instanceCount) || 1));
+    const maxPerWindow = Math.max(1, Math.floor(Number(rateConfig.rateLimitMessagesPerWindow) || 3));
+    const windowMs = Math.max(1000, Math.floor(Number(rateConfig.rateLimitWindowMs) || 60000));
 
-    const daysPerWeek = daysSet.size || 5;
-    const weeksNeeded = Math.ceil(contacts / daysPerWeek);
+    if (contacts === 0) return { estimatedCompletion: null, minHoursRequired: 0 };
 
-    if (weeksNeeded <= 1) {
-      return `~${daysPerWeek} day${daysPerWeek === 1 ? '' : 's'} to complete`;
+    // Total first messages only (replies depend on user responses — not predictable)
+    const totalMessages = contacts * seqLen;
+
+    // Rate per minute per instance (from env config)
+    const ratePerMin = maxPerWindow / (windowMs / 60000);
+
+    // Max throughput: all instances combined, per minute
+    const maxThroughputPerMin = ratePerMin * instCount;
+
+    // Minimum minutes required at max rate
+    const minMinutes = Math.ceil(totalMessages / maxThroughputPerMin);
+    const minHours = Math.ceil(minMinutes / 60);
+
+    // Selected time slot: hours per day × number of selected days
+    const [startH, startM] = String(operationalStart || '09:00').split(':').map(Number);
+    const [endH, endM] = String(operationalEnd || '21:00').split(':').map(Number);
+    const hoursPerDay = Math.max(
+      0,
+      (endH * 60 + (endM || 0) - startH * 60 - (startM || 0)) / 60,
+    );
+    const selectedDays = daysSet.size || 1;
+
+    let label = '';
+    if (minHours < 1) {
+      label = `~${minMinutes} min to complete`;
+    } else if (minHours < 24) {
+      label = `~${minHours}h minimum required`;
+    } else {
+      const days = Math.ceil(minHours / hoursPerDay || minHours / 12);
+      label = `~${days} days minimum required`;
     }
-    return `~${weeksNeeded} week${weeksNeeded === 1 ? '' : 's'} to complete`;
-  }, [totalContacts, daysSet]);
+
+    return { estimatedCompletion: label, minHoursRequired: minHours };
+  }, [totalContacts, templates, instanceCount, rateConfig, operationalStart, operationalEnd, daysSet]);
 
   const sortedAnchors = useMemo(
     () =>

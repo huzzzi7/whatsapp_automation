@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Button from '../components/ui/Button';
 import CampaignStepper from '../components/campaign/CampaignStepper';
 import ExcelUploadSection from '../components/automation/ExcelUploadSection';
-import { listGreenInstances } from '../api';
+import { getConfig, listGreenInstances } from '../api';
 import CampaignSettingsForm from '../components/campaign/CampaignSettingsForm';
 import CampaignTestForm from '../components/campaign/CampaignTestForm';
 import CampaignReviewStep from '../components/campaign/CampaignReviewStep';
@@ -51,6 +51,7 @@ export default function CampaignWizardPage() {
     campaignJob: null,
   });
   const [instances, setInstances] = useState([]);
+  const [rateConfig, setRateConfig] = useState({ rateLimitMessagesPerWindow: 3, rateLimitWindowMs: 60000 });
   const [campaignName, setCampaignName] = useState('');
   const [stepError, setStepError] = useState('');
   const [uploadError, setUploadError] = useState('');
@@ -74,6 +75,8 @@ export default function CampaignWizardPage() {
         });
       })
       .catch(() => setInstances([]));
+
+    getConfig().then(setRateConfig).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -150,6 +153,31 @@ export default function CampaignWizardPage() {
       }
       if (!manualOk) {
         setStepError('Choose a WhatsApp instance (manual mode).');
+        return;
+      }
+
+      // Validate selected time slot is sufficient for the campaign
+      const contacts = wizardData.uploadResult?.totalUsers ?? wizardData.uploadResult?.users?.length ?? 0;
+      const seqLen = Math.max(1, (cs.templates || []).length);
+      const instCount = Math.max(1, instances.length || 1);
+      const maxPerMin = rateConfig.rateLimitMessagesPerWindow / (rateConfig.rateLimitWindowMs / 60000);
+      const totalMsgs = contacts * seqLen;
+      const minMinutes = Math.ceil(totalMsgs / (maxPerMin * instCount));
+      const minHours = Math.ceil(minMinutes / 60);
+
+      const [sH, sM] = String(cs.operationalStart || '09:00').split(':').map(Number);
+      const [eH, eM] = String(cs.operationalEnd || '21:00').split(':').map(Number);
+      const hoursPerDay = Math.max(0, (eH * 60 + (eM || 0) - sH * 60 - (sM || 0)) / 60);
+
+      // Count selected days (parse operationalDays string)
+      const selectedDays = String(cs.operationalDays || '').split(',').filter(Boolean).length || 1;
+      const totalSelectedHours = hoursPerDay * selectedDays;
+
+      if (minHours > 0 && totalSelectedHours < minHours) {
+        setStepError(
+          `Selected time slot (${totalSelectedHours.toFixed(1)}h) is less than minimum required (${minHours}h). ` +
+            `Extend your operational hours or add more days.`
+        );
         return;
       }
     }
@@ -295,6 +323,8 @@ export default function CampaignWizardPage() {
               instances={instances}
               error={stepError || undefined}
               totalContacts={wizardData.uploadResult?.totalUsers ?? wizardData.uploadResult?.users?.length ?? 0}
+              instanceCount={instances.length || 1}
+              rateConfig={rateConfig}
             />
           </>
         ) : currentStep === 3 ? (

@@ -62,6 +62,18 @@ export async function logout() {
   });
 }
 
+export async function getConfig() {
+  try {
+    const data = await apiFetch('/api/config', { method: 'GET' });
+    return {
+      rateLimitMessagesPerWindow: Number(data.rateLimitMessagesPerWindow) || 3,
+      rateLimitWindowMs: Number(data.rateLimitWindowMs) || 60000,
+    };
+  } catch {
+    return { rateLimitMessagesPerWindow: 3, rateLimitWindowMs: 60000 };
+  }
+}
+
 export async function getMe() {
   const res = await fetch(BASE_URL + '/api/auth/me', {
     ...defaultFetchOpts,
