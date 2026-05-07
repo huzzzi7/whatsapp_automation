@@ -54,12 +54,6 @@ function getMessageCooldownMs() {
   return raw;
 }
 
-function getReplyContextCooldownMs() {
-  const raw = parseInt(process.env.REPLY_COOLDOWN_MS || '120000', 10);
-  if (!Number.isFinite(raw) || raw < 0) return 120000;
-  return raw;
-}
-
 const DEFAULT_SEND_FIRST_MESSAGE_CONCURRENCY = 1;
 
 /**

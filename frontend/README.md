@@ -1,6 +1,6 @@
 # React + Vite (dashboard)
 
-The legacy Excel upload / campaign UI remains available at **`public/index.html`** (served by the Node server) until you fully validate the React flow. The dashboard campaign flow is **`/campaign`** (Campaign Wizard). **`/send`** redirects to **`/campaign`**.
+In production, the built UI is served from **`frontend/dist`** by **`server.js`**. The dashboard campaign flow is **`/campaign`** (Campaign Wizard). **`/send`** redirects to **`/campaign`**.
 
 ### Dev: API proxy
 

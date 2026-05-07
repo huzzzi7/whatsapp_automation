@@ -50,8 +50,6 @@ const DDL = {
   failed_count INT NOT NULL DEFAULT 0,
   skipped_count INT NOT NULL DEFAULT 0,
   batch_size INT NULL,
-  delay_seconds INT NULL,
-  message_delay_seconds INT NULL,
   error_message TEXT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

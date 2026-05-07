@@ -538,6 +538,26 @@ async function markContactSent(contactId) {
   );
 }
 
+/**
+ * Called by messageWorker after Green API confirms actual delivery.
+ * Updates delivered_at timestamp and sets delivery_confirmed = 1.
+ * This is separate from markContactSent (which fires at enqueue time).
+ */
+async function markContactDelivered(contactId) {
+  try {
+    await pool.execute(
+      `UPDATE campaign_contacts 
+       SET delivered_at = NOW(), delivery_confirmed = 1 
+       WHERE id = ? AND first_send_status = 'sent'`,
+      [Number(contactId)],
+    );
+  } catch (err) {
+    // Non-fatal: column may not exist yet; worker should not crash on this
+    const log = require('../utils/logger').createLogger('worker');
+    log.warn({ err: err.message, contactId, event: 'mark_delivered_failed' }, 'markContactDelivered failed (non-fatal)');
+  }
+}
+
 async function markContactFailed(contactId, lastError) {
   const msg = lastError != null ? String(lastError).slice(0, 65535) : 'failed';
   await pool.execute(
@@ -595,6 +615,7 @@ module.exports = {
   getDailyContactsSentCount,
   getActiveCampaignsDailyLoad,
   markContactSent,
+  markContactDelivered,
   markContactFailed,
   markContactSkipped,
   getCampaignById,

@@ -1,5 +1,5 @@
 /**
- * Build payload for POST /api/campaign/log (same shape as AutomationPage).
+ * Build payload for POST /api/campaign/log (same shape as CampaignWizardPage).
  * @param {object} uploadResult - snapshot with byUniversity, universities
  * @param {unknown[]} usersSent
  * @param {{ scope: 'all' } | { scope: 'university', universityName: string }} meta

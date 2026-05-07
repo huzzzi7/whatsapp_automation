@@ -11,7 +11,15 @@ const log = createLogger('worker');
  * @param {'message'|'reply'|'warmup'} [queueTarget]
  */
 async function enqueueMessage(payload, queueTarget = 'message') {
-  const jobId = `${payload.greenInstanceDbId || 'x'}-${payload.phoneDigits || payload.chatId}-${payload.messageCount ?? 0}-${Date.now()}`;
+  // Deterministic jobId: same contact + same sequence step always produces same id.
+  // This lets BullMQ naturally reject duplicate enqueues for the same contact in the same campaign.
+  // For campaign messages: greenInstanceDbId-phone-messageCount-campaignId
+  // For reply/warmup: greenInstanceDbId-phone-messageCount-timestamp (still needs uniqueness)
+  const isCampaign = String(payload.context || '').toLowerCase() === 'campaign' && payload.campaignId;
+  const jobId = isCampaign
+    ? `${payload.greenInstanceDbId || 'x'}-${payload.phoneDigits || payload.chatId}-${payload.messageCount ?? 0}-${payload.campaignId}`
+    : `${payload.greenInstanceDbId || 'x'}-${payload.phoneDigits || payload.chatId}-${payload.messageCount ?? 0}-${Date.now()}`;
+
   const jobOptions = {
     jobId,
     removeOnComplete: { count: 20 },
@@ -19,6 +27,26 @@ async function enqueueMessage(payload, queueTarget = 'message') {
     attempts: 3,
     backoff: { type: 'exponential', delay: 5000 },
   };
+
+  // Pre-enqueue dedup: if a job with this deterministic id already exists in any active state, skip.
+  if (isCampaign) {
+    try {
+      const queue = messageQueue;
+      const existing = await queue.getJob(jobId);
+      if (existing) {
+        const state = await existing.getState();
+        if (['waiting', 'active', 'delayed', 'paused'].includes(state)) {
+          log.warn(
+            { event: 'job_dedup_skipped', jobId, chatId: payload.chatId, campaignId: payload.campaignId },
+            'Duplicate campaign job skipped — already in queue',
+          );
+          return { queued: true, deduped: true };
+        }
+      }
+    } catch (dedupErr) {
+      log.warn({ err: dedupErr.message, event: 'dedup_check_failed' }, 'Dedup check failed, proceeding');
+    }
+  }
 
   try {
     const queue =

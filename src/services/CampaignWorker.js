@@ -263,7 +263,24 @@ async function runCampaignWorker(campaignId, opts = {}) {
       }
     }
 
-    const batchSize = Math.max(1, Number(current.batchSize) || 20);
+    // Always process 1 contact per loop iteration.
+    // The inter-message delay (CAMPAIGN_INTER_MESSAGE_DELAY_MS) in replyFlow.js controls pace.
+    // batchSize from DB is intentionally ignored — rate is controlled by .env settings only.
+    const batchSize = 1;
+
+    // Rate-pacing: wait before fetching+sending each contact.
+    // Formula: windowMs / maxPerWindow = ms per message per instance.
+    // Example: 60000ms / 1 msg = 60s between sends. Set RATE_LIMIT_MESSAGES_PER_WINDOW=1, RATE_LIMIT_WINDOW_MS=60000.
+    if (batchNum > 0) {
+      const msPerWindow = Math.max(1000, parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10));
+      const maxPerWindow = Math.max(1, parseInt(process.env.RATE_LIMIT_MESSAGES_PER_WINDOW || '1', 10));
+      const paceMs = Math.floor(msPerWindow / maxPerWindow);
+      campLog.info(
+        { event: 'campaign_pace_delay', paceMs, msPerWindow, maxPerWindow },
+        `pacing: waiting ${paceMs}ms before next contact`,
+      );
+      await sleepMs(paceMs);
+    }
 
     const contacts = isMultiInstance
       ? await getPendingContacts(campaignId, batchSize, greenInstanceDbId)

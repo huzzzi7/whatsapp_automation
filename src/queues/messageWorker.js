@@ -7,6 +7,7 @@ const { Worker, DelayedError } = require('bullmq');
 const { bullMqConnection, bullMqSkipVersionCheck, maskRedisHostForLog } = require('./connection');
 const { controlledSend } = require('../services/controlledSend');
 const { waitForRateLimit, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS } = require('../utils/instanceRateLimiter');
+const { markContactDelivered } = require('../repositories/campaignRepository');
 const {
   getGreenQueueDepth,
   getGreenQueueMax,
@@ -150,6 +151,25 @@ async function processMessageJob(job, token) {
   } catch (err) {
     jobLog.error({ err: err.message, event: 'worker_job_failed' }, 'Job FAILED');
     throw err;
+  }
+
+  // Mark actual delivery in DB (separate from markContactSent which fires at enqueue time).
+  // Uses campaignId + phoneDigits from job payload to find the contact row.
+  if (result.sent && job.data.campaignId && job.data.phoneDigits) {
+    try {
+      const pool = require('../mysql');
+      const [[contactRow]] = await pool.execute(
+        `SELECT id FROM campaign_contacts 
+         WHERE campaign_id = ? AND phone_normalized = ? 
+         LIMIT 1`,
+        [job.data.campaignId.replace(/^campaign-/, ''), job.data.phoneDigits],
+      );
+      if (contactRow?.id) {
+        await markContactDelivered(contactRow.id);
+      }
+    } catch (deliveryErr) {
+      jobLog.warn({ err: deliveryErr.message, event: 'mark_delivered_lookup_failed' }, 'Delivery mark failed (non-fatal)');
+    }
   }
 
   if (result.skipped) {
