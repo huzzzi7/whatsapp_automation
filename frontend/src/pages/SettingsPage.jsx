@@ -32,8 +32,8 @@ function webhookFullUrl(webhookPath) {
 
 function AuthStatusBadge({ authStatus }) {
   const s = String(authStatus || '').toLowerCase();
-  const isAuth = s.includes('authorized') || s.includes('connected');
-  const isUnauth = s.includes('notauthorized') || s.includes('blocked') || s.includes('yellowcard');
+  const isAuth = s === 'authorized' || s === 'connected' || s === 'yellowcard';
+  const isUnauth = s === 'notauthorized' || s === 'blocked';
   const color = isAuth
     ? 'var(--color-success, #22c55e)'
     : isUnauth

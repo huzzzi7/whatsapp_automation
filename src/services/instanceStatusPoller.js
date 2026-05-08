@@ -2,14 +2,14 @@ const pool = require('../mysql');
 const { resolveGreenApiConfig } = require('../greenInstance');
 const { getStateInstance } = require('../greenapi');
 const { createLogger } = require('../utils/logger');
+const { isAuthorizedGreenInstanceState } = require('../utils/greenInstanceAuthState');
 
 const log = createLogger('instancePoller');
 let pollerInterval = null;
 let onStatusChangedCallback = null;
 
 function isAuthorizedState(stateInstance) {
-  const s = String(stateInstance || '').toLowerCase();
-  return s.includes('authorized') || s.includes('connected');
+  return isAuthorizedGreenInstanceState(stateInstance);
 }
 
 async function pollSingleInstance(row) {

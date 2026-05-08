@@ -120,8 +120,8 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     console.log(
       `[Webhook] Instance status changed: instanceId=${greenApi.instanceId} status=${instanceStatus}`,
     );
-    const onlineStates = ['authorized', 'connected'];
-    if (onlineStates.some((s) => String(instanceStatus).toLowerCase().includes(s))) {
+    const { isAuthorizedGreenInstanceState } = require('./utils/greenInstanceAuthState');
+    if (isAuthorizedGreenInstanceState(instanceStatus)) {
       console.log(
         `[Webhook] Instance reconnected — auto-clearing queue for instanceId=${greenApi.instanceId}`,
       );
@@ -141,7 +141,7 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     // Update DB auth status from webhook event
     try {
       const { recalculateActiveCampaigns } = require('./services/campaignRecalculator');
-      const newIsActive = onlineStates.some((s) => String(instanceStatus).toLowerCase().includes(s)) ? 1 : 0;
+      const newIsActive = isAuthorizedGreenInstanceState(instanceStatus) ? 1 : 0;
       const [rows2] = await pool.execute('SELECT isActive FROM green_instances WHERE id = ? LIMIT 1', [
         greenInstanceDbId,
       ]);
