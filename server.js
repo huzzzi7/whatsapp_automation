@@ -282,6 +282,38 @@ const frontendDistPath = path.join(__dirname, 'frontend/dist');
 const frontendIndexPath = path.join(frontendDistPath, 'index.html');
 const hasFrontendBuild = fs.existsSync(frontendDistPath) && fs.existsSync(frontendIndexPath);
 
+async function runAuthSchemaAutoMigrations() {
+  const statements = [
+    "ALTER TABLE green_instances ADD COLUMN isActive TINYINT(1) NOT NULL DEFAULT 1",
+    "ALTER TABLE green_instances ADD COLUMN authStatus VARCHAR(50) NOT NULL DEFAULT 'unknown'",
+    'ALTER TABLE green_instances ADD COLUMN statusCheckedAt DATETIME NULL',
+    'ALTER TABLE green_instances ADD COLUMN manualDisabled TINYINT(1) NOT NULL DEFAULT 0',
+    'ALTER TABLE campaign_contacts ADD INDEX idx_cc_campaign_status_instance (campaign_id, first_send_status, assigned_instance_id, sort_order)',
+  ];
+
+  for (const sql of statements) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await pool.execute(sql);
+      logger.info({ event: 'auto_migration_ok', sql }, 'Auto-migration OK');
+    } catch (err) {
+      const msg = err?.message || '';
+      const code = err?.code || '';
+      const lower = msg.toLowerCase();
+      const alreadyExists =
+        code === 'ER_DUP_FIELDNAME' ||
+        code === 'ER_DUP_KEYNAME' ||
+        lower.includes('duplicate column') ||
+        lower.includes('duplicate key name');
+      if (alreadyExists) {
+        logger.info({ event: 'auto_migration_exists', sql }, 'Auto-migration already exists');
+      } else {
+        logger.warn({ event: 'auto_migration_failed', sql, err: msg }, 'Auto-migration failed (continuing)');
+      }
+    }
+  }
+}
+
 if (hasFrontendBuild) {
   app.use(express.static(frontendDistPath));
 } else {
@@ -598,6 +630,10 @@ app.get('/api/instances', requireAdmin, async (req, res) => {
         apiTokenMasked: maskApiToken(r.apiToken),
         /** Path segment for webhooks; full URL = public API host + this path */
         webhookPath: `/api/webhook/greenapi/${r.id}`,
+        isActive: r.isActive != null ? Boolean(r.isActive) : true,
+        authStatus: r.authStatus || 'unknown',
+        statusCheckedAt: r.statusCheckedAt || null,
+        manualDisabled: Boolean(r.manualDisabled),
       })),
     });
   } catch (err) {
@@ -660,7 +696,7 @@ app.post('/api/instances', requireAdmin, async (req, res) => {
 });
 
 app.put('/api/instances/:id', requireAdmin, async (req, res) => {
-  const { name, phoneNumber, greenInstanceId, apiToken } = req.body || {};
+  const { name, phoneNumber, greenInstanceId, apiToken, manualDisabled } = req.body || {};
   try {
     const [existRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [req.params.id]);
     const existing = existRows[0];
@@ -675,10 +711,30 @@ app.put('/api/instances/:id', requireAdmin, async (req, res) => {
     if (!n || !gid || !tok) {
       return res.status(400).json({ error: 'name, greenInstanceId, and apiToken cannot be empty.' });
     }
+    const nextManualDisabled =
+      manualDisabled != null ? (manualDisabled ? 1 : 0) : existing.manualDisabled != null ? Number(existing.manualDisabled) : 0;
     await pool.execute(
-      'UPDATE green_instances SET name = ?, phoneNumber = ?, greenInstanceId = ?, apiToken = ? WHERE id = ?',
-      [n, p, gid, tok, req.params.id],
+      `UPDATE green_instances
+       SET name = ?, phoneNumber = ?, greenInstanceId = ?, apiToken = ?,
+           manualDisabled = ?,
+           isActive = IF(? = 1, 0, isActive)
+       WHERE id = ?`,
+      [
+        n,
+        p,
+        gid,
+        tok,
+        nextManualDisabled,
+        nextManualDisabled ? 1 : 0,
+        req.params.id,
+      ],
     );
+
+    if (manualDisabled != null && Boolean(manualDisabled) !== Boolean(existing.manualDisabled)) {
+      const { recalculateActiveCampaigns } = require('./src/services/campaignRecalculator');
+      recalculateActiveCampaigns().catch((e) => console.error('[PUT instance] recalc error:', e.message));
+    }
+
     const [updRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [req.params.id]);
     const row = updRows[0];
     res.json({
@@ -689,11 +745,37 @@ app.put('/api/instances/:id', requireAdmin, async (req, res) => {
         greenInstanceId: row.greenInstanceId,
         apiTokenMasked: maskApiToken(row.apiToken),
         webhookPath: `/api/webhook/greenapi/${row.id}`,
+        isActive: row.isActive != null ? Boolean(row.isActive) : true,
+        authStatus: row.authStatus || 'unknown',
+        statusCheckedAt: row.statusCheckedAt || null,
+        manualDisabled: Boolean(row.manualDisabled),
       },
     });
   } catch (err) {
     console.error('[Instances update]', err);
     res.status(500).json({ error: err.message || 'Update failed' });
+  }
+});
+
+app.post('/api/instances/:id/refresh-status', requireAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [req.params.id]);
+    const row = rows[0];
+    if (!row) return res.status(404).json({ error: 'Not found' });
+    const { pollSingleInstance } = require('./src/services/instanceStatusPoller');
+    await pollSingleInstance(row);
+    const { recalculateActiveCampaigns } = require('./src/services/campaignRecalculator');
+    await recalculateActiveCampaigns();
+    const [updated] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [req.params.id]);
+    const r = updated[0];
+    res.json({
+      id: r.id,
+      isActive: Boolean(r.isActive),
+      authStatus: r.authStatus || 'unknown',
+      statusCheckedAt: r.statusCheckedAt || null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Refresh failed' });
   }
 });
 
@@ -1704,7 +1786,8 @@ app.get('/{*splat}', (req, res) => {
 
 logger.info({ event: 'server_starting' }, 'Starting server...');
 
-app.listen(PORT, '0.0.0.0', () => {
+function startListening() {
+  app.listen(PORT, '0.0.0.0', () => {
   logger.info({ event: 'server_listen', port: PORT }, `Server running on port ${PORT}`);
   logger.info(
     { event: 'webhook_route_hint' },
@@ -1754,7 +1837,27 @@ app.listen(PORT, '0.0.0.0', () => {
       );
       startQueueRegistrations();
     });
-});
+  });
+}
+
+runAuthSchemaAutoMigrations()
+  .catch((err) =>
+    logger.warn({ event: 'auto_migration_unhandled', err: err?.message || String(err) }, 'auto migration unhandled'),
+  )
+  .finally(() => {
+    startListening();
+    const { startPoller } = require('./src/services/instanceStatusPoller');
+    const { recalculateActiveCampaigns } = require('./src/services/campaignRecalculator');
+    startPoller(60000, async ({ instanceId, prevIsActive, newIsActive }) => {
+      if (prevIsActive !== newIsActive) {
+        try {
+          await recalculateActiveCampaigns();
+        } catch (e) {
+          console.error('[Poller] recalculate error:', e.message);
+        }
+      }
+    });
+  });
 
 process.on('SIGTERM', async () => {
   logger.info({ event: 'shutdown_sigterm' }, 'SIGTERM received, closing workers...');

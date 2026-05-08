@@ -4,7 +4,9 @@ const pool = require('../mysql');
  * Returns all active green_instances from DB ordered by createdAt ASC
  */
 async function getAvailableInstances() {
-  const [rows] = await pool.execute('SELECT * FROM green_instances ORDER BY createdAt ASC');
+  const [rows] = await pool.execute(
+    'SELECT * FROM green_instances WHERE isActive = 1 AND manualDisabled = 0 ORDER BY createdAt ASC'
+  );
   return Array.isArray(rows) ? rows : [];
 }
 

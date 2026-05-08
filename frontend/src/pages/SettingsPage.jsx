@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import GreenInstanceModal from '../components/settings/GreenInstanceModal';
-import { listGreenInstances, deleteGreenInstance } from '../api';
+import { listGreenInstances, deleteGreenInstance, refreshInstanceStatus, updateInstanceActiveState } from '../api';
 
 function IconEdit() {
   return (
@@ -28,6 +28,24 @@ function webhookFullUrl(webhookPath) {
     .replace(/\/$/, '');
   if (!webhookPath) return '';
   return base ? `${base}${webhookPath}` : '';
+}
+
+function AuthStatusBadge({ authStatus }) {
+  const s = String(authStatus || '').toLowerCase();
+  const isAuth = s.includes('authorized') || s.includes('connected');
+  const isUnauth = s.includes('notauthorized') || s.includes('blocked') || s.includes('yellowcard');
+  const color = isAuth
+    ? 'var(--color-success, #22c55e)'
+    : isUnauth
+      ? 'var(--color-danger, #ef4444)'
+      : 'var(--text-muted, #9ca3af)';
+  const label = isAuth ? 'Authorized' : isUnauth ? 'Unauthorized' : 'Unknown';
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem' }}>
+      <span style={{ width: 8, height: 8, borderRadius: '50%', background: color, display: 'inline-block' }} />
+      <span style={{ color }}>{label}</span>
+    </span>
+  );
 }
 
 export default function SettingsPage() {
@@ -77,6 +95,24 @@ export default function SettingsPage() {
       await load();
     } catch (e) {
       setError(e.message || 'Delete failed');
+    }
+  };
+
+  const handleToggleActive = async (inst) => {
+    try {
+      await updateInstanceActiveState(inst.id, !inst.manualDisabled);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Toggle failed');
+    }
+  };
+
+  const handleRefreshStatus = async (id) => {
+    try {
+      await refreshInstanceStatus(id);
+      await load();
+    } catch (e) {
+      setError(e.message || 'Refresh failed');
     }
   };
 
@@ -139,6 +175,28 @@ export default function SettingsPage() {
               <p className="settings-instance-card__meta">
                 <span className="settings-instance-card__label">Token</span> {inst.apiTokenMasked}
               </p>
+              <p className="settings-instance-card__meta">
+                <span className="settings-instance-card__label">Status</span>{' '}
+                <AuthStatusBadge authStatus={inst.authStatus} />
+                {inst.statusCheckedAt && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: 8 }}>
+                    checked {new Date(inst.statusCheckedAt).toLocaleTimeString()}
+                  </span>
+                )}
+              </p>
+              <p className="settings-instance-card__meta">
+                <span className="settings-instance-card__label">Use in campaigns</span>{' '}
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={!inst.manualDisabled}
+                    onChange={() => handleToggleActive(inst)}
+                  />
+                  <span style={{ fontSize: '0.85rem', color: inst.manualDisabled ? 'var(--text-muted)' : 'inherit' }}>
+                    {inst.manualDisabled ? 'Disabled' : 'Enabled'}
+                  </span>
+                </label>
+              </p>
               <p className="settings-instance-card__webhook">
                 <span className="settings-instance-card__label">Webhook path</span>
                 <code className="settings-instance-card__code">
@@ -163,6 +221,13 @@ export default function SettingsPage() {
                   }}
                 >
                   {copiedId === inst.id ? 'Copied' : 'Copy webhook URL'}
+                </Button>
+                <Button
+                  type="button"
+                  className="ui-button--inline ui-button--secondary"
+                  onClick={() => handleRefreshStatus(inst.id)}
+                >
+                  Refresh Status
                 </Button>
                 {!webhookFullUrl(inst.webhookPath || `/api/webhook/greenapi/${inst.id}`) ? (
                   <span className="settings-instance-card__webhook-note">

@@ -182,12 +182,20 @@ async function clearMessagesQueue({ instanceId, apiToken, baseUrl }) {
   }
 }
 
+async function getStateInstance(greenApi) {
+  const { instanceId, apiToken, baseUrl } = greenApi;
+  const url = `${baseUrl}/waInstance${instanceId}/getStateInstance/${apiToken}`;
+  const resp = await axios.get(url, { timeout: 10000 });
+  return resp.data; // { stateInstance: "authorized" | "notAuthorized" | ... }
+}
+
 module.exports = {
   sendMessage,
   simulateTyping,
   receiveNotification,
   deleteNotification,
   clearMessagesQueue,
+  getStateInstance,
 };
 
 /** Phase 2.2 self-test: `node src/greenapi.js` — five runs, mock chatId, logs duration and timestamps. */

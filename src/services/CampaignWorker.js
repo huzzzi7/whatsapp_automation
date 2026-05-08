@@ -240,10 +240,15 @@ async function runCampaignWorker(campaignId, opts = {}) {
       continue;
     }
 
-    if (dailyLimitPerInstance != null) {
+    const effectiveDailyLimit =
+      current.dailyLimitPerInstance != null && Number.isFinite(Number(current.dailyLimitPerInstance))
+        ? Math.max(1, Math.floor(Number(current.dailyLimitPerInstance)))
+        : dailyLimitPerInstance;
+
+    if (effectiveDailyLimit != null) {
       const today = dateStringInTz(new Date(), timeZone);
       const sentToday = await getDailyContactsSentCount(campaignId, greenInstanceDbId, today);
-      if (sentToday >= dailyLimitPerInstance) {
+      if (sentToday >= effectiveDailyLimit) {
         // Sleep until tomorrow's next operational start in the operational timezone.
         const msUntil = msUntilNextOperationalStart(operationalStart, operationalDays, timeZone);
         campLog.info(
@@ -252,7 +257,7 @@ async function runCampaignWorker(campaignId, opts = {}) {
             greenInstanceDbId,
             today,
             sentToday,
-            dailyLimitPerInstance,
+            dailyLimitPerInstance: effectiveDailyLimit,
             sleepMs: msUntil,
           },
           'daily limit reached for instance today; sleeping until next operational start',

@@ -251,6 +251,20 @@ export async function deleteGreenInstance(id) {
   if (!res.ok) throw new Error(data?.error || 'Delete failed');
 }
 
+export async function refreshInstanceStatus(id) {
+  const res = await apiFetch(`/api/instances/${id}/refresh-status`, { method: 'POST' });
+  return res;
+}
+
+export async function updateInstanceActiveState(id, manualDisabled) {
+  const res = await apiFetch(`/api/instances/${id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ manualDisabled }),
+  });
+  return res;
+}
+
 export async function uploadFile(formData) {
   const res = await fetch(BASE_URL + '/api/upload', {
     method: 'POST',

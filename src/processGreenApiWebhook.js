@@ -9,7 +9,8 @@ const { parseIncomingNotification } = require('./receive');
 const { onIncomingReply, onIncomingReplyTest } = require('./replyFlow');
 const { resolveGreenApiConfig } = require('./greenInstance');
 const { enqueueMessage } = require('./queues/enqueueMessage');
-const { detectIntent } = require('./intentEngine');
+const { detectIntentAi } = require('./services/aiIntentService');
+const { generateAiReply } = require('./services/aiReplyService');
 const state = require('./state');
 const testState = require('./testState');
 const { insertIncomingMessage } = require('./repositories/incomingMessageRepository');
@@ -136,6 +137,27 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
         console.error('[Webhook] Auto clear local state failed:', err.message);
       }
     }
+
+    // Update DB auth status from webhook event
+    try {
+      const { recalculateActiveCampaigns } = require('./services/campaignRecalculator');
+      const newIsActive = onlineStates.some((s) => String(instanceStatus).toLowerCase().includes(s)) ? 1 : 0;
+      const [rows2] = await pool.execute('SELECT isActive FROM green_instances WHERE id = ? LIMIT 1', [
+        greenInstanceDbId,
+      ]);
+      const prevIsActive = rows2[0]?.isActive;
+      await pool.execute(
+        `UPDATE green_instances
+         SET authStatus = ?, isActive = IF(manualDisabled = 1, 0, ?), statusCheckedAt = NOW()
+         WHERE id = ?`,
+        [String(instanceStatus).slice(0, 50), newIsActive, greenInstanceDbId]
+      );
+      if (prevIsActive !== newIsActive) {
+        await recalculateActiveCampaigns();
+      }
+    } catch (err) {
+      console.error('[Webhook] Failed to update instance auth status in DB:', err.message);
+    }
     return;
   }
 
@@ -207,7 +229,7 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     logger.warn('[Webhook] followup cancellation failed (non-fatal):', err.message);
   }
 
-  const intent = detectIntent(parsed.text);
+  const intent = await detectIntentAi(parsed.text);
   let intentReplySent = false;
   console.log(
     '[INTENT_RESULT]',
@@ -330,6 +352,62 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   }
   console.log('[Webhook] Test state exists:', hasTest);
   console.log('[Webhook] Prod state exists:', hasProd);
+
+  let aiReplySent = false;
+  if (
+    !intentReplySent &&
+    (hasTest || hasProd) &&
+    intent.reply === null &&
+    intent.stopSequence === false
+  ) {
+    try {
+      let userStateForAi = null;
+      for (const key of keyVariants) {
+        userStateForAi = await Promise.resolve(state.getState(greenInstanceDbId, key));
+        if (userStateForAi) break;
+        userStateForAi = testState.getState(greenInstanceDbId, key);
+        if (userStateForAi) break;
+      }
+      const aiResult = await generateAiReply({
+        incomingText: parsed.text,
+        intentType: intent.type,
+        userState: userStateForAi,
+        phoneDigits: norm,
+        greenInstanceDbId,
+      });
+
+      if (aiResult.replyText && parsed.chatId) {
+        const meta = await getPipelineMetaForPhone(greenInstanceDbId, keyVariants);
+        const aiSend = await enqueueMessage(
+          {
+            instanceId: greenApi.instanceId,
+            apiToken: greenApi.apiToken,
+            baseUrl: greenApi.baseUrl,
+            chatId: parsed.chatId,
+            message: aiResult.replyText,
+            context: 'intent',
+            messageCount: meta.messageCount,
+            lastMessageAt: meta.lastMessageAt,
+            greenInstanceDbId: String(greenInstanceDbId || ''),
+            phoneDigits: String(parsed.phone || ''),
+          },
+          'reply',
+        );
+        if (aiSend.queued) {
+          console.log('[AI Reply] queued for', parsed.phone, '| text:', aiResult.replyText.slice(0, 50));
+          aiReplySent = true;
+        }
+      }
+
+      if (aiResult.blockSequence) {
+        console.log('[AI Reply] blockSequence=true for', parsed.phone);
+        await persistStoppedStatus();
+        return;
+      }
+    } catch (aiErr) {
+      console.error('[AI Reply] block failed (sequence continues):', aiErr.message);
+    }
+  }
   console.log('[REPLYFLOW_CHECK]', {
     hasTest,
     hasProd,
@@ -354,15 +432,15 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Prod state keys:', Object.keys(state.loadState()));
   console.log('[Webhook] Test state keys:', Object.keys(testState.loadState()));
   if (hasTest) {
-    if (intentReplySent) {
-      console.log('Sequence skipped due to intent reply');
+    if (intentReplySent || aiReplySent) {
+      console.log('Sequence skipped due to intent/AI reply');
     } else {
       console.log('[REPLY_FLOW] executing test path');
       await onIncomingReplyTest(parsed.phone, replyOpts);
     }
   } else if (hasProd) {
-    if (intentReplySent) {
-      console.log('Sequence skipped due to intent reply');
+    if (intentReplySent || aiReplySent) {
+      console.log('Sequence skipped due to intent/AI reply');
     } else {
       console.log('[REPLY_FLOW] executing prod path');
       await onIncomingReply(parsed.phone, replyOpts);
