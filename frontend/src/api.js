@@ -221,6 +221,19 @@ export async function listGreenInstances() {
   return data.instances ?? [];
 }
 
+export async function getCampaignPreview(params) {
+  const qs = new URLSearchParams();
+  if (params.totalContacts != null) qs.set('totalContacts', String(params.totalContacts));
+  if (params.instanceMode) qs.set('instanceMode', params.instanceMode);
+  if (params.greenInstanceId) qs.set('greenInstanceId', params.greenInstanceId);
+  if (params.operationalStart) qs.set('operationalStart', params.operationalStart);
+  if (params.operationalEnd) qs.set('operationalEnd', params.operationalEnd);
+  if (params.operationalDays) qs.set('operationalDays', params.operationalDays);
+  if (params.campaignEndDate) qs.set('campaignEndDate', params.campaignEndDate);
+  const data = await apiFetch(`/api/campaign/preview?${qs.toString()}`);
+  return data;
+}
+
 export async function getGreenInstance(id) {
   const data = await apiFetch(`/api/instances/${encodeURIComponent(id)}`, { method: 'GET' });
   return data.instance;

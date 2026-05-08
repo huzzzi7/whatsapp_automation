@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Button from '../ui/Button';
-import { startCampaign, getCampaignStatus, logCampaign, listGreenInstances } from '../../api';
+import { startCampaign, getCampaignStatus, logCampaign, listGreenInstances, getCampaignPreview } from '../../api';
+import AuthStatusBadge from '../ui/AuthStatusBadge';
 import { applyTemplatesToUploadResult } from '../../utils/campaignTemplates';
 import { buildCampaignLogPayload } from '../../utils/campaignLog';
 import {
@@ -16,7 +17,7 @@ const POLL_MS = 1500;
  * @param {string} props.selectedInstanceId
  * @param {{ id: string; name?: string }[]} props.instances
  * @param {string} [props.campaignName]
- * @param {{ batchSize: number; templates: string[] }} props.campaignSettings
+ * @param {{ templates: string[] }} props.campaignSettings
  * @param {{ phone?: string; university?: string; link?: string; group?: string; greenInstanceId?: string }} [props.testSettings]
  * @param {() => void} props.onBack
  * @param {(jobId: string) => void} props.onCampaignStart
@@ -46,6 +47,10 @@ export default function CampaignReviewStep({
   const scheduleDialogRef = useRef(null);
   const scheduleModalRef = useRef(null);
 
+  const [preview, setPreview] = useState(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState('');
+
   const mergedUpload = useMemo(
     () => applyTemplatesToUploadResult(uploadResult, campaignSettings?.templates || []),
     [uploadResult, campaignSettings?.templates],
@@ -66,6 +71,47 @@ export default function CampaignReviewStep({
   const operationalStart = String(campaignSettings?.operationalStart || '09:00');
   const operationalEnd = String(campaignSettings?.operationalEnd || '21:00');
   const campaignEndDate = String(campaignSettings?.campaignEndDate || '');
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchPreview() {
+      setPreviewLoading(true);
+      setPreviewError('');
+      try {
+        const totalContacts = uploadResult?.totalUsers ?? uploadResult?.users?.length ?? 0;
+        const isManual = campaignSettings?.instanceMode === 'manual' && manualInstanceId;
+        const result = await getCampaignPreview({
+          totalContacts,
+          instanceMode: isManual ? 'manual' : 'auto',
+          greenInstanceId: isManual ? manualInstanceId : undefined,
+          operationalStart: campaignSettings?.operationalStart,
+          operationalEnd: campaignSettings?.operationalEnd,
+          operationalDays: campaignSettings?.operationalDays,
+          campaignEndDate: campaignSettings?.campaignEndDate,
+        });
+        if (!cancelled) setPreview(result);
+      } catch (e) {
+        if (!cancelled) {
+          setPreviewError(e.message || 'Preview unavailable');
+          setPreview(null);
+        }
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    }
+    fetchPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    uploadResult,
+    manualInstanceId,
+    campaignSettings?.instanceMode,
+    campaignSettings?.operationalStart,
+    campaignSettings?.operationalEnd,
+    campaignSettings?.operationalDays,
+    campaignSettings?.campaignEndDate,
+  ]);
 
   function parseDaysSet(str) {
     const set = new Set();
@@ -162,7 +208,6 @@ export default function CampaignReviewStep({
         const data = await startCampaign(users, {
           greenInstanceId: instanceMode === 'manual' ? manualInstanceId : null,
           name: trimmedName,
-          batchSize: campaignSettings.batchSize,
           scheduledAt: scheduledAtIso,
           operationalStart,
           operationalEnd,
@@ -324,6 +369,96 @@ export default function CampaignReviewStep({
 
   return (
     <div className="campaign-review-step">
+      {/* Instance Preview Panel */}
+      <div style={{ marginBottom: '1.5rem' }}>
+        <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 600 }}>
+          Instances for this Campaign
+        </h3>
+
+        {previewLoading && (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Calculating instance plan…</p>
+        )}
+
+        {!previewLoading && previewError && (
+          <div
+            style={{
+              padding: '0.6rem 0.9rem',
+              background: 'var(--color-warning-bg, #fef9c3)',
+              border: '1px solid var(--color-warning, #ca8a04)',
+              borderRadius: 6,
+              fontSize: '0.85rem',
+              color: 'var(--color-warning-text, #854d0e)',
+              marginBottom: '0.75rem',
+            }}
+          >
+            ⚠ Preview unavailable: {previewError}
+          </div>
+        )}
+
+        {!previewLoading && preview && preview.ok && (
+          <>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
+              {preview.instances.map((inst) => (
+                <div
+                  key={inst.id}
+                  style={{
+                    border: '1px solid var(--border-color, #e5e7eb)',
+                    borderRadius: 8,
+                    padding: '0.75rem 1rem',
+                    minWidth: 180,
+                    background: 'var(--card-bg, #fff)',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: 2 }}>
+                    {inst.name || '—'}
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: 6 }}>
+                    {inst.phoneNumber || '—'}
+                  </div>
+                  <AuthStatusBadge authStatus={inst.authStatus} />
+                  {inst.dailyLimitPerInstance != null && (
+                    <div style={{ fontSize: '0.8rem', marginTop: 6, color: 'var(--text-muted)' }}>
+                      ~{inst.dailyLimitPerInstance} msgs / day
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                gap: '1.5rem',
+                flexWrap: 'wrap',
+                padding: '0.6rem 0.9rem',
+                background: 'var(--surface-2, #f9fafb)',
+                borderRadius: 6,
+                fontSize: '0.875rem',
+              }}
+            >
+              <span>
+                <strong>Instances:</strong> {preview.instanceCount}
+              </span>
+              {preview.dailyLimitPerInstance != null && (
+                <span>
+                  <strong>Per instance / day:</strong> {preview.dailyLimitPerInstance}
+                </span>
+              )}
+              {preview.totalDailyMessages != null && (
+                <span>
+                  <strong>Total / day:</strong> {preview.totalDailyMessages}
+                </span>
+              )}
+              {preview.dailyLimitPerInstance == null && (
+                <span style={{ color: 'var(--text-muted)' }}>
+                  Daily pace set by operational window &amp; server rate limits
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
       <h2 style={{ marginTop: 0 }}>Review &amp; send</h2>
       <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
         Confirm details below, then start the campaign. Message 1 will be sent to each recipient; replies trigger the
@@ -358,9 +493,6 @@ export default function CampaignReviewStep({
         </p>
         <p style={{ margin: '0 0 0.5rem' }}>
           <strong>Universities</strong>: {uniCount}
-        </p>
-        <p style={{ margin: '0 0 0.5rem' }}>
-          <strong>Batch size</strong>: {campaignSettings?.batchSize ?? '—'}
         </p>
         <p style={{ margin: '0 0 0.5rem' }}>
           <strong>Operational Days</strong>: {fmtOperationalDaysHuman(operationalDays)}

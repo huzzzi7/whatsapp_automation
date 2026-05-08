@@ -1025,6 +1025,126 @@ app.get('/api/campaign/stats', async (req, res) => {
   }
 });
 
+// GET /api/campaign/preview — read-only: instance plan + daily limits (no DB writes)
+app.get('/api/campaign/preview', async (req, res) => {
+  try {
+    const q = req.query || {};
+    const totalContacts = Math.max(0, Math.floor(Number(q.totalContacts) || 0));
+    const mode = String(q.instanceMode || 'auto').toLowerCase();
+    const rawGid = q.greenInstanceId != null ? String(q.greenInstanceId).trim() : '';
+
+    const envOpStart = String(process.env.CAMPAIGN_OPERATIONAL_START || '09:00').trim() || '09:00';
+    const envOpEnd = String(process.env.CAMPAIGN_OPERATIONAL_END || '21:00').trim() || '21:00';
+    const operationalStart =
+      q.operationalStart != null && String(q.operationalStart).trim() !== ''
+        ? String(q.operationalStart).trim()
+        : envOpStart;
+    const operationalEnd =
+      q.operationalEnd != null && String(q.operationalEnd).trim() !== ''
+        ? String(q.operationalEnd).trim()
+        : envOpEnd;
+    const operationalDays =
+      q.operationalDays != null && String(q.operationalDays).trim() !== ''
+        ? String(q.operationalDays).trim()
+        : '1,2,3,4,5';
+
+    function hhmmToMinutes(hhmm) {
+      const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || '').trim());
+      if (!m) return null;
+      return Number(m[1]) * 60 + Number(m[2]);
+    }
+
+    function toIsoDateString(d) {
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const dd = String(d.getUTCDate()).padStart(2, '0');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+
+    let campaignEndDate = null;
+    if (q.campaignEndDate != null && String(q.campaignEndDate).trim() !== '') {
+      const d = new Date(String(q.campaignEndDate).trim());
+      if (!Number.isNaN(d.getTime())) campaignEndDate = toIsoDateString(d);
+    }
+    if (!campaignEndDate) {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + 7);
+      campaignEndDate = toIsoDateString(d);
+    }
+
+    const { getAvailableInstances, calculateDailyLimit } = require('./src/services/instanceLoadBalancer');
+    const { getActiveCampaignsDailyLoad } = require('./src/repositories/campaignRepository');
+
+    let instances = [];
+    let isMultiInstance = false;
+    let dailyLimitPerInstance = null;
+
+    if (mode === 'manual' && rawGid) {
+      const [campRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [rawGid]);
+      const row = campRows[0];
+      if (!row) {
+        return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
+      }
+      instances = [row];
+      isMultiInstance = false;
+      dailyLimitPerInstance = null;
+    } else if (mode === 'manual' && !rawGid) {
+      return res.status(400).json({ ok: false, error: 'greenInstanceId is required for manual mode.' });
+    } else {
+      instances = await getAvailableInstances();
+      if (!instances.length) {
+        return res.status(400).json({ ok: false, error: 'No authorized instances available' });
+      }
+      isMultiInstance = true;
+      dailyLimitPerInstance = await calculateDailyLimit(
+        totalContacts,
+        instances,
+        new Date(campaignEndDate),
+        operationalDays,
+        operationalEnd,
+      );
+
+      const maxRatePerMin = parseInt(process.env.RATE_LIMIT_MESSAGES_PER_WINDOW || '3', 10);
+      const windowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10);
+      const opStartMins = hhmmToMinutes(operationalStart) ?? 9 * 60;
+      const opEndMins = hhmmToMinutes(operationalEnd) ?? 21 * 60;
+      const operationalMinutesPerDay = Math.max(1, opEndMins - opStartMins);
+      const physicalMaxPerInstancePerDay = Math.floor(
+        (operationalMinutesPerDay / (windowMs / 60000)) * maxRatePerMin,
+      );
+
+      let maxExistingLoad = 0;
+      for (const inst of instances) {
+        const existingLoad = await getActiveCampaignsDailyLoad('', String(inst.id));
+        if (existingLoad > maxExistingLoad) maxExistingLoad = existingLoad;
+      }
+      const availableCapacity = Math.max(1, physicalMaxPerInstancePerDay - maxExistingLoad);
+      dailyLimitPerInstance = Math.min(dailyLimitPerInstance, availableCapacity);
+    }
+
+    res.json({
+      ok: true,
+      instanceMode: isMultiInstance ? 'auto' : 'manual',
+      instanceCount: instances.length,
+      instances: instances.map((r) => ({
+        id: r.id,
+        name: r.name,
+        phoneNumber: r.phoneNumber,
+        authStatus: r.authStatus || 'unknown',
+        isActive: r.isActive != null ? Boolean(r.isActive) : true,
+        dailyLimitPerInstance,
+      })),
+      dailyLimitPerInstance,
+      totalDailyMessages:
+        dailyLimitPerInstance != null ? dailyLimitPerInstance * instances.length : null,
+      campaignEndDate,
+    });
+  } catch (err) {
+    console.error('[Campaign preview]', err);
+    res.status(500).json({ ok: false, error: err.message || 'Campaign preview failed.' });
+  }
+});
+
 // POST /api/campaign/start – reply-driven: send only message 1 to each user
 //
 // Production DB: deploying this app does not run migrations. If `campaigns.name` is missing on

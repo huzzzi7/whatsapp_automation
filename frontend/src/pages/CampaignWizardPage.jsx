@@ -28,7 +28,6 @@ export default function CampaignWizardPage() {
     selectedInstanceId: '',
     uploadResult: null,
     campaignSettings: {
-      batchSize: 10,
       templates: [...DEFAULT_CAMPAIGN_TEMPLATE_STRINGS],
       operationalAnchors: '1,5',
       operationalDays: '1,2,3,4,5',
@@ -123,8 +122,6 @@ export default function CampaignWizardPage() {
       const templates = cs?.templates;
       const hasTemplates =
         Array.isArray(templates) && templates.length >= 1 && String(templates[0] ?? '').trim();
-      const batchNum = Number(cs.batchSize);
-      const batchOk = Number.isFinite(batchNum) && Math.floor(batchNum) >= 1;
       const mode = cs?.instanceMode === 'manual' ? 'manual' : 'auto';
       const manualOk = mode === 'manual' ? Boolean(String(cs?.selectedInstanceId || '').trim()) : true;
       const startOk = /^\d{2}:\d{2}$/.test(String(cs?.operationalStart || ''));
@@ -133,10 +130,6 @@ export default function CampaignWizardPage() {
       const daysOk = Boolean(String(cs?.operationalDays || '').trim());
       if (!hasTemplates) {
         setStepError('Add at least one message (Message 1 cannot be empty).');
-        return;
-      }
-      if (!batchOk) {
-        setStepError('Users per batch must be at least 1.');
         return;
       }
       if (!daysOk) {

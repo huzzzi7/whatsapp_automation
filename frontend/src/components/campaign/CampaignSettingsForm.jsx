@@ -43,15 +43,13 @@ const DAY_OPTIONS = [
 ];
 
 /**
- * @param {{ templates: string[], batchSize: number }} value
+ * @param {{ templates: string[] }} value
  */
 export function normalizeCampaignSettings(value) {
   const templates = Array.isArray(value.templates) ? [...value.templates] : [];
-  const safeBatchSize = Math.max(1, Math.floor(Number(value.batchSize) || 1));
   const operationalAnchors = String(value.operationalAnchors || '1,5');
   return {
     templates,
-    batchSize: safeBatchSize,
     operationalAnchors,
     operationalDays: String(value.operationalDays || '1,2,3,4,5'),
     campaignEndDate: String(value.campaignEndDate || todayPlusDaysIso(7)),
@@ -63,7 +61,7 @@ export function normalizeCampaignSettings(value) {
 }
 
 /**
- * @param {{ templates: string[], batchSize: number }} value
+ * @param {{ templates: string[] }} value
  * @returns {{ ok: true, value: object } | { ok: false, error: string }}
  */
 export function validateCampaignSettings(value) {
@@ -76,10 +74,6 @@ export function validateCampaignSettings(value) {
       ok: false,
       error: 'Message 1 cannot be empty (nothing would be sent on campaign start).',
     };
-  }
-  const batchNum = Number(value?.batchSize);
-  if (!Number.isFinite(batchNum) || Math.floor(batchNum) < 1) {
-    return { ok: false, error: 'Users per batch must be at least 1.' };
   }
 
   const opStart = String(value?.operationalStart || '').trim();
@@ -119,11 +113,11 @@ export function validateCampaignSettings(value) {
 }
 
 /**
- * Controlled campaign settings: batch size, message templates.
+ * Controlled campaign settings: message templates and schedule.
  *
  * @param {object} props
- * @param {{ templates: string[], batchSize: number }} props.value
- * @param {(next: { templates: string[], batchSize: number }) => void} props.onChange
+ * @param {{ templates: string[] }} props.value
+ * @param {(next: { templates: string[] }) => void} props.onChange
  * @param {string} [props.error]
  * @param {import('react').RefObject<HTMLTextAreaElement | null>} [props.firstMessageFieldRef]
  */
@@ -138,7 +132,6 @@ export default function CampaignSettingsForm({
   rateConfig = { rateLimitMessagesPerWindow: 3, rateLimitWindowMs: 60000 },
 }) {
   const templates = Array.isArray(value?.templates) ? value.templates : [];
-  const batchSize = value?.batchSize ?? 20;
   const instanceMode = value?.instanceMode === 'manual' ? 'manual' : 'auto';
   const selectedInstanceId = value?.selectedInstanceId ?? '';
   const operationalStart = value?.operationalStart ?? '09:00';
@@ -178,7 +171,6 @@ export default function CampaignSettingsForm({
     (next) => {
       onChange({
         templates: Array.isArray(next.templates) ? next.templates : [],
-        batchSize: Number(next.batchSize) || 0,
         operationalAnchors: String(next.operationalAnchors || ''),
         operationalDays: String(next.operationalDays || ''),
         campaignEndDate: String(next.campaignEndDate || ''),
@@ -213,13 +205,6 @@ export default function CampaignSettingsForm({
     [emit, templates, value],
   );
 
-  const setBatchSize = useCallback(
-    (raw) => {
-      emit({ ...value, batchSize: raw });
-    },
-    [emit, value],
-  );
-
   const daysSet = useMemo(() => parseDaysSet(operationalDays), [operationalDays]);
   const anchorSet = useMemo(
     () =>
@@ -252,7 +237,6 @@ export default function CampaignSettingsForm({
     if (!error) return {};
     const e = String(error);
     if (e.includes('message') || e.includes('Message')) return { templates: e };
-    if (e.includes('batch')) return { batchSize: e };
     if (e.includes('day') || e.includes('Day')) return { days: e };
     if (e.includes('time slot') || e.includes('minimum required') || e.includes('Extend your')) {
       return { time: e };
@@ -396,23 +380,6 @@ export default function CampaignSettingsForm({
       </p>
 
       {fieldErrors.general ? <div className="alert-error campaign-message-modal__error">{fieldErrors.general}</div> : null}
-
-      <div className="campaign-message-modal__row">
-        <label className="ui-input-label campaign-message-modal__label" htmlFor="camp-batch-size">
-          Users per batch
-        </label>
-        <input
-          id="camp-batch-size"
-          className="ui-input-field"
-          type="number"
-          min={1}
-          value={batchSize}
-          onChange={(e) => setBatchSize(e.target.value)}
-        />
-        {fieldErrors.batchSize ? (
-          <div style={{ color: 'var(--error, #dc2626)', fontSize: 12, marginTop: 4 }}>{fieldErrors.batchSize}</div>
-        ) : null}
-      </div>
 
       <div className="campaign-message-modal__list">
         {templates.map((text, index) => (
