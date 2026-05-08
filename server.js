@@ -1841,22 +1841,48 @@ function startListening() {
 }
 
 runAuthSchemaAutoMigrations()
-  .catch((err) =>
-    logger.warn({ event: 'auto_migration_unhandled', err: err?.message || String(err) }, 'auto migration unhandled'),
-  )
-  .finally(() => {
+  .catch((err) => {
+    logger.error(
+      { event: 'auto_migration_failed', err: err?.message || String(err) },
+      'AUTO MIGRATION FAILED - run scripts/sql/alter-green-instances-auth.sql manually on live DB',
+    );
+    console.error(
+      '[STARTUP] DB auto-migration failed:',
+      err?.message,
+      '— run scripts/sql/alter-green-instances-auth.sql manually',
+    );
+  })
+  .finally(async () => {
     startListening();
-    const { startPoller } = require('./src/services/instanceStatusPoller');
-    const { recalculateActiveCampaigns } = require('./src/services/campaignRecalculator');
-    startPoller(60000, async ({ instanceId, prevIsActive, newIsActive }) => {
-      if (prevIsActive !== newIsActive) {
-        try {
-          await recalculateActiveCampaigns();
-        } catch (e) {
-          console.error('[Poller] recalculate error:', e.message);
-        }
+    try {
+      const [colCheck] = await pool.execute(
+        "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'green_instances' AND COLUMN_NAME = 'isActive' LIMIT 1",
+      );
+      if (!colCheck.length) {
+        console.error(
+          '[Poller] SKIPPED — isActive column missing on green_instances. Run migration manually: scripts/sql/alter-green-instances-auth.sql',
+        );
+        logger.error(
+          { event: 'poller_skipped_missing_column' },
+          'Poller skipped: isActive column missing. Run migration manually.',
+        );
+        return;
       }
-    });
+      const { startPoller } = require('./src/services/instanceStatusPoller');
+      const { recalculateActiveCampaigns } = require('./src/services/campaignRecalculator');
+      startPoller(60000, async ({ instanceId, prevIsActive, newIsActive }) => {
+        if (prevIsActive !== newIsActive) {
+          try {
+            await recalculateActiveCampaigns();
+          } catch (e) {
+            console.error('[Poller] recalculate error:', e.message);
+          }
+        }
+      });
+      logger.info({ event: 'poller_start' }, 'Instance status poller started');
+    } catch (e) {
+      console.error('[Poller] startup check failed:', e.message);
+    }
   });
 
 process.on('SIGTERM', async () => {
