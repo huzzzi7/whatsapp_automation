@@ -13,7 +13,9 @@ const log = createLogger('worker');
 const activePairIds = new Set();
 
 async function listGreenInstances() {
-  const [rows] = await pool.execute('SELECT * FROM green_instances ORDER BY createdAt ASC');
+  const [rows] = await pool.execute(
+    'SELECT * FROM green_instances WHERE isActive = 1 AND manualDisabled = 0 ORDER BY createdAt ASC',
+  );
   return Array.isArray(rows) ? rows : [];
 }
 
@@ -80,7 +82,11 @@ async function startWarmupSession() {
 
   const instances = await listGreenInstances();
   if (instances.length < 2) {
-    throw new Error('Warm-up requires at least 2 Green instances');
+    log.warn(
+      { event: 'warmup_skipped_insufficient_instances', instanceCount: instances.length },
+      'Warmup skipped: fewer than 2 authorized and enabled instances available',
+    );
+    return { skipped: true, reason: 'Fewer than 2 authorized instances available for warmup pairing' };
   }
 
   const templates = await warmupRepository.getActiveTemplates();

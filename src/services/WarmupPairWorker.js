@@ -21,7 +21,10 @@ function safeParseMessagesJson(messagesJson) {
 }
 
 async function loadGreenInstanceRow(instanceDbId) {
-  const [rows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [instanceDbId]);
+  const [rows] = await pool.execute(
+    'SELECT * FROM green_instances WHERE id = ? AND isActive = 1 AND manualDisabled = 0 LIMIT 1',
+    [instanceDbId],
+  );
   return rows[0] || null;
 }
 
@@ -57,7 +60,9 @@ async function runWarmupPair(pair) {
   const aRow = await loadGreenInstanceRow(pair.senderInstanceDbId);
   const bRow = await loadGreenInstanceRow(pair.receiverInstanceDbId);
   if (!aRow || !bRow) {
-    throw new Error('Warmup pair instance rows missing');
+    throw new Error(
+      `Green instance not found or not authorized/enabled: sender=${pair.senderInstanceDbId}, receiver=${pair.receiverInstanceDbId}`,
+    );
   }
 
   const aGreen = resolveGreenApiConfig(aRow);
