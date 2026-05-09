@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Button from '../ui/Button';
 import { MAX_MESSAGES } from '../../utils/campaignTemplates';
 
@@ -110,6 +110,38 @@ export function validateCampaignSettings(value) {
   }
 
   return { ok: true, value: normalizeCampaignSettings(value) };
+}
+
+function LondonTimeClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const timeStr = now.toLocaleTimeString('en-GB', {
+    timeZone: 'Europe/London',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const dateStr = now.toLocaleDateString('en-GB', {
+    timeZone: 'Europe/London',
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+  return (
+    <div style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'flex-end', textAlign: 'right' }}>
+      <div>
+        Times are in <strong>Europe/London</strong> timezone
+      </div>
+      <div style={{ fontVariantNumeric: 'tabular-nums', marginTop: 2 }}>
+        Current time: <strong>{timeStr}</strong> · {dateStr}
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -499,9 +531,7 @@ export default function CampaignSettingsForm({
               onChange={(e) => emit({ ...value, operationalEnd: e.target.value })}
             />
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', alignSelf: 'flex-end' }}>
-            Times are in Europe/London timezone
-          </div>
+          <LondonTimeClock />
         </div>
 
         {fieldErrors.time ? (

@@ -75,7 +75,9 @@ export default function CampaignWizardPage() {
       })
       .catch(() => setInstances([]));
 
-    getConfig().then(setRateConfig).catch(() => {});
+    getConfig().then(setRateConfig).catch((err) => {
+      console.warn('[CampaignWizard] getConfig failed, using defaults:', err?.message);
+    });
   }, []);
 
   useEffect(() => {
@@ -156,19 +158,20 @@ export default function CampaignWizardPage() {
       const maxPerMin = rateConfig.rateLimitMessagesPerWindow / (rateConfig.rateLimitWindowMs / 60000);
       const totalMsgs = contacts * seqLen;
       const minMinutes = Math.ceil(totalMsgs / (maxPerMin * instCount));
-      const minHours = Math.ceil(minMinutes / 60);
 
       const [sH, sM] = String(cs.operationalStart || '09:00').split(':').map(Number);
       const [eH, eM] = String(cs.operationalEnd || '21:00').split(':').map(Number);
-      const hoursPerDay = Math.max(0, (eH * 60 + (eM || 0) - sH * 60 - (sM || 0)) / 60);
+      const minutesPerDay = Math.max(0, (eH * 60 + (eM || 0)) - (sH * 60 + (sM || 0)));
 
-      // Count selected days (parse operationalDays string)
       const selectedDays = String(cs.operationalDays || '').split(',').filter(Boolean).length || 1;
-      const totalSelectedHours = hoursPerDay * selectedDays;
+      const totalSelectedMinutes = minutesPerDay * selectedDays;
 
-      if (minHours > 0 && totalSelectedHours < minHours) {
+      if (minMinutes > 0 && totalSelectedMinutes < minMinutes) {
+        const displayRequired = minMinutes < 60 ? `${minMinutes} min` : `${(minMinutes / 60).toFixed(1)}h`;
+        const displaySelected =
+          totalSelectedMinutes < 60 ? `${totalSelectedMinutes} min` : `${(totalSelectedMinutes / 60).toFixed(1)}h`;
         setStepError(
-          `Selected time slot (${totalSelectedHours.toFixed(1)}h) is less than minimum required (${minHours}h). ` +
+          `Selected time slot (${displaySelected}) is less than minimum required (${displayRequired}). ` +
             `Extend your operational hours or add more days.`
         );
         return;
