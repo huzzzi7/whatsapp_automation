@@ -1,6 +1,6 @@
 const pool = require('../mysql');
 const { resolveGreenApiConfig } = require('../greenInstance');
-const { getStateInstance } = require('../greenapi');
+const { getStateInstance, getWaSettings } = require('../greenapi');
 const { createLogger } = require('../utils/logger');
 const { isAuthorizedGreenInstanceState } = require('../utils/greenInstanceAuthState');
 
@@ -20,15 +20,45 @@ async function pollSingleInstance(row) {
     const newIsActive = isAuthorizedState(stateInstance) ? 1 : 0;
     const newAuthStatus = String(stateInstance).slice(0, 50);
 
+    let newPhoneDigits = null;
+    try {
+      const waSettings = await getWaSettings(greenApi);
+      const wid = waSettings?.wid || '';
+      const widDigits = wid.split('@')[0].replace(/\D/g, '');
+      if (widDigits && widDigits.length >= 7) {
+        newPhoneDigits = widDigits;
+      }
+    } catch (phoneErr) {
+      log.warn(
+        { event: 'poll_phone_sync_error', instanceId: row.id, err: phoneErr.message },
+        'Could not fetch live phone from getWaSettings',
+      );
+    }
+
     const prevIsActive = row.isActive;
     const prevAuthStatus = row.authStatus;
 
-    await pool.execute(
-      `UPDATE green_instances
-       SET authStatus = ?, isActive = IF(manualDisabled = 1, 0, ?), statusCheckedAt = NOW()
-       WHERE id = ?`,
-      [newAuthStatus, newIsActive, row.id]
-    );
+    const dbPhoneDigits = String(row.phoneNumber || '').replace(/\D/g, '');
+    if (newPhoneDigits != null && newPhoneDigits !== dbPhoneDigits) {
+      await pool.execute(
+        `UPDATE green_instances
+         SET authStatus = ?, isActive = IF(manualDisabled = 1, 0, ?),
+             statusCheckedAt = NOW(), phoneNumber = ?
+         WHERE id = ?`,
+        [newAuthStatus, newIsActive, newPhoneDigits, row.id],
+      );
+      log.info(
+        { event: 'phone_synced', instanceId: row.id, oldPhone: row.phoneNumber, newPhone: newPhoneDigits },
+        'Phone number synced from GreenAPI',
+      );
+    } else {
+      await pool.execute(
+        `UPDATE green_instances
+         SET authStatus = ?, isActive = IF(manualDisabled = 1, 0, ?), statusCheckedAt = NOW()
+         WHERE id = ?`,
+        [newAuthStatus, newIsActive, row.id],
+      );
+    }
 
     const changed = prevIsActive !== newIsActive || prevAuthStatus !== newAuthStatus;
     if (changed && typeof onStatusChangedCallback === 'function') {

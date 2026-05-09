@@ -3,6 +3,8 @@
  */
 const { v4: uuidv4 } = require('uuid');
 const pool = require('../mysql');
+const { getWaSettings } = require('../greenapi');
+const { resolveGreenApiConfig } = require('../greenInstance');
 const warmupRepository = require('../repositories/warmupRepository');
 const { runWarmupPair } = require('./WarmupPairWorker');
 const { createLogger } = require('../utils/logger');
@@ -89,6 +91,57 @@ async function startWarmupSession() {
     return { skipped: true, reason: 'Fewer than 2 authorized instances available for warmup pairing' };
   }
 
+  // Hydrate live phone numbers from GreenAPI before building pairs
+  const hydratedInstances = [];
+  for (const inst of instances) {
+    try {
+      const greenApi = resolveGreenApiConfig(inst);
+      const waSettings = await getWaSettings(greenApi);
+      const wid = waSettings?.wid || '';
+      const widDigits = wid.split('@')[0].replace(/\D/g, '');
+      if (!widDigits || widDigits.length < 7) {
+        log.warn(
+          { event: 'warmup_skipped_instance_no_wid', instanceId: inst.id, name: inst.name },
+          `Warmup: skipping instance ${inst.name} — getWaSettings returned no valid wid`,
+        );
+        continue;
+      }
+      const dbPhone = String(inst.phoneNumber || '').replace(/\D/g, '');
+      if (widDigits !== dbPhone) {
+        await pool.execute('UPDATE green_instances SET phoneNumber = ? WHERE id = ?', [widDigits, inst.id]);
+        log.info(
+          {
+            event: 'warmup_phone_updated',
+            instanceId: inst.id,
+            name: inst.name,
+            oldPhone: dbPhone,
+            newPhone: widDigits,
+          },
+          `Phone updated for ${inst.name}: ${dbPhone} → ${widDigits}`,
+        );
+      }
+      hydratedInstances.push({ ...inst, phoneNumber: widDigits });
+    } catch (err) {
+      log.warn(
+        {
+          event: 'warmup_skipped_instance_getWaSettings_failed',
+          instanceId: inst.id,
+          name: inst.name,
+          err: err.message,
+        },
+        `Warmup: skipping instance ${inst.name} — getWaSettings failed: ${err.message}`,
+      );
+    }
+  }
+
+  if (hydratedInstances.length < 2) {
+    log.warn(
+      { event: 'warmup_skipped_insufficient_hydrated_instances', instanceCount: hydratedInstances.length },
+      'Warmup skipped: fewer than 2 instances with confirmed live phone numbers',
+    );
+    return { skipped: true, reason: 'Fewer than 2 instances with confirmed live phone numbers' };
+  }
+
   const templates = await warmupRepository.getActiveTemplates();
   if (templates.length < 1) {
     throw new Error('No active warmup templates. Seed warmup_templates first.');
@@ -98,7 +151,7 @@ async function startWarmupSession() {
   const mpp = 32;
   const session = await warmupRepository.createSession(sessionId, mpp);
 
-  const pairSpecs = buildPairs(instances);
+  const pairSpecs = buildPairs(hydratedInstances);
   const shuffledTemplates = shuffleInPlace([...templates]);
   const pairsToInsert = pairSpecs.map((p, idx) => {
     const t = shuffledTemplates[idx % shuffledTemplates.length];

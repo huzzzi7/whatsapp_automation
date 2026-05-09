@@ -59,15 +59,10 @@ function mapIntent(type, confidence) {
     return { type: 'UNKNOWN', reply: null, stopSequence: false };
   }
   if (t === 'PRICE') {
-    return {
-      type: 'PRICE',
-      reply:
-        'Salary depends on the job role. Usually it ranges between $400–$1000 with accommodation included. Do you have any experience?',
-      stopSequence: false,
-    };
+    return { type: 'PRICE', reply: null, stopSequence: false };
   }
   if (t === 'LOCATION') {
-    return { type: 'LOCATION', reply: 'The job is in Kyrgyzstan 🇰🇬 with verified companies.', stopSequence: false };
+    return { type: 'LOCATION', reply: null, stopSequence: false };
   }
   if (t === 'INTERESTED') {
     return { type: 'INTERESTED', reply: null, stopSequence: false };

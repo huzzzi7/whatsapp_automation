@@ -29,8 +29,7 @@ function detectIntent(text) {
   if (/\b(salary|price|kitna|paisa|income|pay)\b/i.test(msg)) {
     return {
       type: 'PRICE',
-      reply:
-        'Salary depends on the job role. Usually it ranges between $400–$1000 with accommodation included. Do you have any experience?',
+      reply: null,
       stopSequence: false,
     };
   }
@@ -38,7 +37,7 @@ function detectIntent(text) {
   if (/\b(where|location|country|kahan)\b/i.test(msg)) {
     return {
       type: 'LOCATION',
-      reply: 'The job is in Kyrgyzstan 🇰🇬 with verified companies.',
+      reply: null,
       stopSequence: false,
     };
   }

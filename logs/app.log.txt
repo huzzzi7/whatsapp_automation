@@ -3,3 +3,4 @@ D:\Node\whatsapp\logs\20260508-0000-01-app.log
 D:\Node\whatsapp\logs\20260508-0000-01-app.log
 D:\Node\whatsapp\logs\20260508-0000-02-app.log
 D:\Node\whatsapp\logs\20260509-0000-01-app.log
+D:\Node\whatsapp\logs\20260510-0000-01-app.log

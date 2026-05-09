@@ -72,7 +72,21 @@ async function runWarmupPair(pair) {
   const bPhone = String(bRow.phoneNumber || '').replace(/\D/g, '');
 
   if (!aPhone || !bPhone) {
-    throw new Error('Warmup pair requires phoneNumber for both instances');
+    log.warn(
+      {
+        event: 'warmup_pair_missing_phone',
+        pairId: pair.id,
+        senderInstanceId: pair.senderInstanceDbId,
+        receiverInstanceId: pair.receiverInstanceDbId,
+        aPhone: aPhone || 'MISSING',
+        bPhone: bPhone || 'MISSING',
+      },
+      'Warmup pair has missing phone number — pair will fail. Ensure getWaSettings succeeded at session start.',
+    );
+    throw new Error(
+      `Warmup pair ${pair.id} requires phoneNumber for both instances. ` +
+        `Sender: ${aPhone || 'MISSING'}, Receiver: ${bPhone || 'MISSING'}`,
+    );
   }
 
   const aChatId = toChatId(aPhone);

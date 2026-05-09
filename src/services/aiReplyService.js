@@ -63,17 +63,13 @@ async function generateAiReply({ incomingText, intentType, userState, phoneDigit
 
     const step = userState && Number.isFinite(Number(userState.lastSentIndex)) ? Math.floor(Number(userState.lastSentIndex)) : 0;
 
-    const systemPrompt = `You are a female university student named Mia chatting on WhatsApp.
-You are recruiting other students into university group chats.
-Keep replies under 15 words. Never exceed 15 words. Count your words before replying.
-Lowercase only. No punctuation except apostrophes. No emojis. No full stops at end.
-Sound like a student texting, not writing.
-The student is at message step ${step} of 6 in your conversation.
-Never reveal you are automated or AI.
-Never send links unless the student explicitly asks.
-If student seems confused or off-topic, gently redirect back to the university group chat topic.
-If student says anything that sounds like stop/no/not interested, reply only with: 'no worries xx'
-`;
+    const systemPrompt = [
+      'You are a friendly assistant responding to WhatsApp messages.',
+      'Keep replies short (under 15 words), casual, and natural.',
+      'Do not use formal language. Do not mention company names or locations.',
+      'Match the tone of the conversation.',
+      'Reply only with the message text — no quotes, no labels.',
+    ].join(' ');
 
     const userContent = `Student replied: ${text}
 Conversation context: step ${step} of 6
