@@ -8,3 +8,6 @@ dev.db
 progress.json
 conversation-state.json
 test-conversation-state.json
+
+logs/app.log.txt
+logs/*.log.txt
