@@ -97,8 +97,8 @@ async function startWarmupSession() {
     try {
       const greenApi = resolveGreenApiConfig(inst);
       const waSettings = await getWaSettings(greenApi);
-      const wid = waSettings?.wid || '';
-      const widDigits = wid.split('@')[0].replace(/\D/g, '');
+      const rawPhone = waSettings?.phone || waSettings?.wid || '';
+      const widDigits = rawPhone.split('@')[0].replace(/\D/g, '');
       if (!widDigits || widDigits.length < 7) {
         log.warn(
           { event: 'warmup_skipped_instance_no_wid', instanceId: inst.id, name: inst.name },

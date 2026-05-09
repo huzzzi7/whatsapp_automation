@@ -23,8 +23,8 @@ async function pollSingleInstance(row) {
     let newPhoneDigits = null;
     try {
       const waSettings = await getWaSettings(greenApi);
-      const wid = waSettings?.wid || '';
-      const widDigits = wid.split('@')[0].replace(/\D/g, '');
+      const rawPhone = waSettings?.phone || waSettings?.wid || '';
+      const widDigits = rawPhone.split('@')[0].replace(/\D/g, '');
       if (widDigits && widDigits.length >= 7) {
         newPhoneDigits = widDigits;
       }
