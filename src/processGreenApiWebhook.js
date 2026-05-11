@@ -397,7 +397,6 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
         );
         if (aiSend.queued) {
           console.log('[AI Reply] queued for', parsed.phone, '| text:', aiResult.replyText.slice(0, 50));
-          aiReplySent = true;
         }
       }
 

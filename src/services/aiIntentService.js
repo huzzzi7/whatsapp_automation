@@ -85,8 +85,11 @@ Classify the user message into EXACTLY one of these types:
 - NOT_INTERESTED: user wants to stop, opt out, says no, unsubscribe, stop, remove me, not interested
 - PRICE: user asks about salary, pay, income, money, kitna, paisa
 - LOCATION: user asks about where, location, country, kahan
-- INTERESTED: user says yes, ok, interested, tell me more, details, sure, sounds good
-- UNKNOWN: anything else, casual reply, question not listed above
+- INTERESTED: user says yes, ok, sure, yeah, yep, alright, go on, show me, come on,
+  go ahead, what is it, sounds good, tell me more, details, interested, why not, ok cool,
+  short casual confirmations or invitations to continue the conversation
+- UNKNOWN: unclear message, question about identity, off-topic, suspicious, not clearly
+  wanting to continue the offer (e.g. who is this, do i know you, what do you want)
 IMPORTANT: Only classify as NOT_INTERESTED if the user clearly wants to stop receiving messages.
 Never classify ambiguous messages as NOT_INTERESTED.
 Respond ONLY with valid JSON in this exact format, no other text:

@@ -42,7 +42,13 @@ function detectIntent(text) {
     };
   }
 
-  if (/\b(yes|interested|ok)\b/i.test(msg) || /\btell me\b/i.test(msg) || /\bdetails\b/i.test(msg)) {
+  if (
+    /\b(yes|yeah|yep|sure|ok|alright|interested|go on|go ahead|show me|come on|why not)\b/i.test(msg) ||
+    /\btell me\b/i.test(msg) ||
+    /\bdetails\b/i.test(msg) ||
+    /\bwhat is it\b/i.test(msg) ||
+    /\bsounds good\b/i.test(msg)
+  ) {
     return {
       type: 'INTERESTED',
       reply: null,
