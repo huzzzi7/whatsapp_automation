@@ -353,8 +353,10 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Test state exists:', hasTest);
   console.log('[Webhook] Prod state exists:', hasProd);
 
+  const shouldUseAiReply = String(intent.type || '').toUpperCase() === 'UNKNOWN';
   let aiReplySent = false;
   if (
+    shouldUseAiReply &&
     !intentReplySent &&
     (hasTest || hasProd) &&
     intent.reply === null &&
