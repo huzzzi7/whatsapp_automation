@@ -7,7 +7,18 @@ const { clearAllQueuesForInstance } = require('./instanceQueueGuard');
 
 const log = createLogger('instancePoller');
 let pollerInterval = null;
+let pollerStarting = false;
+let pollerEnabled = false;
 let onStatusChangedCallback = null;
+const STARTUP_POLL_STAGGER_MS = Math.max(
+  0,
+  Math.floor(Number(process.env.INSTANCE_POLLER_STARTUP_STAGGER_MS || '3000') || 3000),
+);
+
+function sleep(ms) {
+  if (!ms) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function isAuthorizedState(stateInstance) {
   return isAuthorizedGreenInstanceState(stateInstance);
@@ -78,10 +89,18 @@ async function pollSingleInstance(row) {
   }
 }
 
-async function pollAllInstances() {
+async function pollAllInstances({ staggerMs = 0 } = {}) {
   try {
     const [rows] = await pool.execute('SELECT * FROM green_instances ORDER BY createdAt ASC');
     if (!Array.isArray(rows) || rows.length === 0) return;
+    if (staggerMs > 0) {
+      for (let i = 0; i < rows.length; i += 1) {
+        if (!pollerEnabled) return;
+        if (i > 0) await sleep(staggerMs);
+        await pollSingleInstance(rows[i]);
+      }
+      return;
+    }
     await Promise.all(rows.map(pollSingleInstance));
   } catch (err) {
     log.error({ event: 'poll_all_error', err: err.message }, 'poll all instances error');
@@ -89,14 +108,27 @@ async function pollAllInstances() {
 }
 
 function startPoller(intervalMs = 60000, onStatusChanged) {
-  if (pollerInterval) return;
+  if (pollerInterval || pollerStarting) return;
   onStatusChangedCallback = onStatusChanged || null;
-  log.info({ event: 'poller_start', intervalMs }, 'instance status poller started');
-  pollAllInstances(); // immediate first run
-  pollerInterval = setInterval(pollAllInstances, intervalMs);
+  pollerEnabled = true;
+  pollerStarting = true;
+  log.info(
+    { event: 'poller_start', intervalMs, startupStaggerMs: STARTUP_POLL_STAGGER_MS },
+    'instance status poller started',
+  );
+  pollAllInstances({ staggerMs: STARTUP_POLL_STAGGER_MS })
+    .catch((err) => log.error({ event: 'startup_poll_error', err: err.message }, 'startup poll error'))
+    .finally(() => {
+      pollerStarting = false;
+      if (!pollerEnabled) return;
+      if (pollerInterval) return;
+      pollerInterval = setInterval(pollAllInstances, intervalMs);
+    });
 }
 
 function stopPoller() {
+  pollerEnabled = false;
+  pollerStarting = false;
   if (pollerInterval) {
     clearInterval(pollerInterval);
     pollerInterval = null;

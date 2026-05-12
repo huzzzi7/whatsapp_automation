@@ -3,6 +3,9 @@
  * URL and auth from config; uses axios for POST.
  */
 const axios = require('axios');
+const { createLogger } = require('./utils/logger');
+
+const log = createLogger('greenapi');
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -11,6 +14,23 @@ function delay(ms) {
 /** Random integer in [3000, 8000] for human typing simulation (Phase 2.2). */
 function randomTypingMs() {
   return Math.floor(Math.random() * (8000 - 3000 + 1)) + 3000;
+}
+
+function assertValidChatIdForGreenApiSend(chatId) {
+  const rawChatId = chatId != null ? String(chatId).trim() : '';
+  const phoneDigits = rawChatId.replace(/@c\.us$/i, '').replace(/@g\.us$/i, '').replace(/\D/g, '');
+
+  if (rawChatId.toLowerCase().endsWith('@g.us') || phoneDigits.length > 15) {
+    log.error(
+      {
+        event: 'invalid_chat_id_group_number',
+        chatId: rawChatId,
+        phoneDigitsLength: phoneDigits.length,
+      },
+      'Rejecting invalid chatId — likely group number disguised as @c.us',
+    );
+    throw new Error('INVALID_CHAT_ID_GROUP_NUMBER: ' + rawChatId);
+  }
 }
 
 async function sendMessageWithRetry(url, body, retries = 2) {
@@ -50,6 +70,7 @@ async function sendMessage(chatId, text, greenApiConfig) {
   if (!instanceId || !apiToken) {
     throw new Error('GreenAPI config missing: instanceId and apiToken are required (configure a Green instance in Settings)');
   }
+  assertValidChatIdForGreenApiSend(chatId);
 
   const url = `${baseUrl}/waInstance${instanceId}/sendMessage/${apiToken}`;
   const body = { chatId, message: text };
@@ -70,6 +91,7 @@ async function simulateTyping(params) {
   if (!instanceId || !apiToken || !baseUrl || !chatId) {
     throw new Error('simulateTyping requires instanceId, apiToken, baseUrl, and chatId');
   }
+  assertValidChatIdForGreenApiSend(chatId);
 
   if (typingMsParam != null) {
     const n = Math.floor(Number(typingMsParam));
