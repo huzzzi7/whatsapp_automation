@@ -261,6 +261,7 @@ async function tryAdvanceLastSent(greenInstanceDbId, phone, expectedIndex, newIn
         sequence: Array.isArray(row.sequence) ? row.sequence : [],
         campaignId: row.campaignId,
         status: row.status,
+        ...(Array.isArray(row.recentInbound) ? { recentInbound: row.recentInbound } : {}),
       });
       const retry = await conversationStateRepository.updateLastSent(
         greenInstanceDbId,

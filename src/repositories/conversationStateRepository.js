@@ -24,6 +24,19 @@ function mapRow(row) {
   }
   out.lastOutboundAt = row.last_outbound_at ? new Date(row.last_outbound_at).getTime() : null;
   out.lastInboundAt = row.last_inbound_at ? new Date(row.last_inbound_at).getTime() : null;
+
+  let recentInbound = [];
+  if (row.inbound_history_json != null && String(row.inbound_history_json).trim() !== '') {
+    try {
+      const h = JSON.parse(row.inbound_history_json);
+      if (Array.isArray(h)) {
+        recentInbound = h.filter((x) => typeof x === 'string').slice(-3);
+      }
+    } catch {
+      recentInbound = [];
+    }
+  }
+  out.recentInbound = recentInbound;
   return out;
 }
 
@@ -37,7 +50,7 @@ async function getState(instanceId, phone) {
   if (!gid || !p) return null;
   const [rows] = await pool.execute(
     `SELECT last_sent_index, campaign_id, sequence_json, status,
-            last_outbound_at, last_inbound_at
+            last_outbound_at, last_inbound_at, inbound_history_json
      FROM conversation_state
      WHERE green_instance_db_id = ? AND phone_normalized = ?
      LIMIT 1`,
@@ -171,6 +184,54 @@ async function upsertState(instanceId, phone, data) {
       [gid, p, lastSent, campaignId, JSON.stringify(seq)],
     );
   }
+
+  if (Object.prototype.hasOwnProperty.call(data, 'recentInbound') && Array.isArray(data.recentInbound)) {
+    const hist = JSON.stringify(data.recentInbound.filter((x) => typeof x === 'string').slice(-3));
+    await pool.execute(
+      `UPDATE conversation_state
+       SET inbound_history_json = ?, updated_at = NOW(3)
+       WHERE green_instance_db_id = ? AND phone_normalized = ?`,
+      [hist, gid, p],
+    );
+  }
+}
+
+/**
+ * Append one inbound message to a ring buffer (max 3) in conversation_state.
+ * @param {string} greenInstanceDbId
+ * @param {string} phoneNormalized
+ * @param {string} newText
+ */
+async function appendInboundHistory(greenInstanceDbId, phoneNormalized, newText) {
+  const gid = String(greenInstanceDbId || '').trim();
+  const p = String(phoneNormalized || '').trim();
+  if (!gid || !p) return;
+  const piece = String(newText ?? '');
+  const [rows] = await pool.execute(
+    `SELECT inbound_history_json FROM conversation_state
+     WHERE green_instance_db_id = ? AND phone_normalized = ?
+     LIMIT 1`,
+    [gid, p],
+  );
+  let arr = [];
+  const cell = rows[0]?.inbound_history_json;
+  if (cell != null && String(cell).trim() !== '') {
+    try {
+      const parsed = JSON.parse(String(cell));
+      if (Array.isArray(parsed)) arr = parsed.filter((x) => typeof x === 'string');
+    } catch {
+      arr = [];
+    }
+  }
+  arr.push(piece);
+  if (arr.length > 3) arr = arr.slice(-3);
+  const json = JSON.stringify(arr);
+  await pool.execute(
+    `UPDATE conversation_state
+     SET inbound_history_json = ?, updated_at = NOW(3)
+     WHERE green_instance_db_id = ? AND phone_normalized = ?`,
+    [json, gid, p],
+  );
 }
 
 async function updateOutboundMeta(greenInstanceDbId, phoneNormalized, opts) {
@@ -267,4 +328,5 @@ module.exports = {
   deleteState,
   updateOutboundMeta,
   updateInboundMeta,
+  appendInboundHistory,
 };

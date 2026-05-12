@@ -16,31 +16,31 @@ const defaultCountryCode = process.env.DEFAULT_COUNTRY_CODE || '44';
 
 const messageTemplates = {
   1: (user) => [
-    `Heyy what you studying at ${user.university} in sept!`,
+    `Heyy are you starting at ${user.university} this sept? 👀`,
+    `yo you going to ${user.university} in september?`,
+    `Hiii did you get into ${user.university} for this year?`,
     `Hey! you going ${user.university} this sept yeah?`,
-    `Hiii are you starting at ${user.university} in september?`,
-    `yo you going to ${user.university} this year?`,
   ],
   2: () => [
-    "Psych! There's another gc if you want to join I can add you",
-    "Haha no way, there's a gc for that you should join",
-    "lol there's actually a group chat for this want me to add you?",
-    "omg same, theres a gc with people from there want in?",
+    "omg there's actually a gc for people going there, want me to add you?",
+    "wait there's a group chat for this you should be in it lol",
+    "haha no way, there's a gc for people going there want in?",
+    "there's a whole gc for this honestly you'd love it, want me to add you?",
   ],
   3: (user) => [
-    'Of course heres the link!' + (user.group ? ` ${user.group}` : ''),
-    'yeah sure here you go!' + (user.group ? ` ${user.group}` : ''),
+    'here you go!' + (user.group ? ` ${user.group}` : ''),
     'sending it now!' + (user.group ? ` ${user.group}` : ''),
+    "ofc here's the link!" + (user.group ? ` ${user.group}` : ''),
   ],
   4: () => [
-    'Did you book the welcome week tickets that came out? We all have on the gc',
-    'have you got your welcome week tickets yet? everyone on the gc has sorted theirs',
-    'btw did you sort welcome week tickets? the gc people all got theirs already',
+    'did you sort your welcome week tickets? everyone on the gc has already got theirs lol',
+    'have you got welcome week tickets yet? the gc people all sorted theirs already',
+    'btw have you done welcome week tickets? we all got ours on the gc',
   ],
   5: () => [
-    'Oh let me send you the link cause cheap rn, we did the cheapest one and queue skip',
-    'ill send you the link, we got the cheapest option with queue skip',
-    'here ill find the link, we all got the budget one with queue jump',
+    'ill send you the link, we got the budget one with queue skip which was sick',
+    'here ill find it, we did the cheapest option with queue jump',
+    'sending the link now, we all got the cheap one with queue skip',
   ],
   6: (user) => [user.link, user.group].filter(Boolean).join(' ') || '',
 };
