@@ -1,13 +1,10 @@
-const PREVIEW_LIMIT = 100;
-
 /**
  * Scrollable preview of uploaded campaign users (max rows for performance).
  * @param {{ users?: Array<Record<string, unknown>> }} props
  */
 export default function ExcelPreviewTable({ users = [] }) {
   const list = Array.isArray(users) ? users : [];
-  const previewUsers = list.slice(0, PREVIEW_LIMIT);
-  const hasMore = list.length > PREVIEW_LIMIT;
+  const previewUsers = list;
 
   const cell = (u, key) => {
     const v = u?.[key];
@@ -153,11 +150,6 @@ export default function ExcelPreviewTable({ users = [] }) {
           </tbody>
         </table>
       </div>
-      {hasMore ? (
-        <p style={{ margin: '8px 0 0', fontSize: '12px', color: 'var(--text-muted, #666)' }}>
-          Showing first {PREVIEW_LIMIT} of {list.length} users
-        </p>
-      ) : null}
     </div>
   );
 }
