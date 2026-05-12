@@ -588,50 +588,6 @@ async function deleteCampaignById(id) {
   return Number(result.affectedRows) || 0;
 }
 
-/**
- * Latest campaign contact row for this Green instance + phone (optional campaign scope).
- * @param {string} greenInstanceDbId - green_instances.id
- * @param {string} phoneNormalized
- * @param {string|null|undefined} campaignId - when set, restricts to this campaign
- * @returns {Promise<{ university?: string, city?: string, group?: string, link?: string, raw: object }|null>}
- */
-async function getContactPayloadByPhone(greenInstanceDbId, phoneNormalized, campaignId) {
-  const gid = String(greenInstanceDbId || '').trim();
-  const phone = String(phoneNormalized || '').trim();
-  if (!gid || !phone) return null;
-  const cid = campaignId != null && String(campaignId).trim() !== '' ? String(campaignId).trim() : null;
-  try {
-    const [rows] = await pool.execute(
-      `SELECT cc.payload_json
-       FROM campaign_contacts cc
-       INNER JOIN campaigns c ON c.id = cc.campaign_id
-       WHERE c.green_instance_id = ?
-         AND cc.phone_normalized = ?
-         AND (? IS NULL OR cc.campaign_id = ?)
-       LIMIT 1`,
-      [gid, phone, cid, cid],
-    );
-    const rawCell = rows[0]?.payload_json;
-    if (rawCell == null || String(rawCell).trim() === '') return null;
-    let p;
-    try {
-      p = typeof rawCell === 'string' ? JSON.parse(rawCell) : rawCell;
-    } catch {
-      return null;
-    }
-    if (!p || typeof p !== 'object') return null;
-    return {
-      university: p.university != null ? String(p.university) : undefined,
-      city: p.city != null ? String(p.city) : undefined,
-      group: p.group != null ? String(p.group) : undefined,
-      link: p.link != null ? String(p.link) : undefined,
-      raw: p,
-    };
-  } catch {
-    return null;
-  }
-}
-
 module.exports = {
   createCampaign,
   getNextQueueOrder,
@@ -666,5 +622,4 @@ module.exports = {
   countCampaignContacts,
   listCampaignContactsPage,
   deleteCampaignById,
-  getContactPayloadByPhone,
 };

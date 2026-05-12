@@ -15,8 +15,7 @@ const state = require('./state');
 const testState = require('./testState');
 const { insertIncomingMessage } = require('./repositories/incomingMessageRepository');
 const { clearAllQueuesForInstance } = require('./services/instanceQueueGuard');
-const { updateInboundMeta, appendInboundHistory } = require('./repositories/conversationStateRepository');
-const { getContactPayloadByPhone } = require('./repositories/campaignRepository');
+const { updateInboundMeta } = require('./repositories/conversationStateRepository');
 const { logger } = require('./utils/logger');
 
 /**
@@ -206,23 +205,11 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   }
   console.log('[DEDUPE_RESULT] inserted');
 
-  const norm = String(parsed.phone || '').replace(/\D/g, '');
-  const keyVariants = [...new Set([norm, norm.replace(/^0+/, '')].filter((k) => k && k.length > 0))];
-
   // Best-effort: record inbound timestamp for follow-up cancellation
   try {
     await updateInboundMeta(greenInstanceDbId, parsed.phone, { lastInboundAt: Date.now() });
   } catch (err) {
     logger.warn('[Webhook] updateInboundMeta failed (non-fatal):', err.message);
-  }
-
-  try {
-    const trimmedInbound = String(parsed.text || '').trim();
-    if (trimmedInbound) {
-      await appendInboundHistory(greenInstanceDbId, norm, trimmedInbound);
-    }
-  } catch (err) {
-    logger.warn('[Webhook] appendInboundHistory failed (non-fatal):', err.message);
   }
 
   const intent = await detectIntentAi(parsed.text);
@@ -231,6 +218,9 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     '[INTENT_RESULT]',
     `type=${intent.type} stopSequence=${intent.stopSequence} reply=${intent.reply ? 'yes' : 'no'}`,
   );
+
+  const norm = String(parsed.phone || '').replace(/\D/g, '');
+  const keyVariants = [...new Set([norm, norm.replace(/^0+/, '')].filter((k) => k && k.length > 0))];
 
   async function persistStoppedStatus() {
     for (const key of keyVariants) {
@@ -352,19 +342,12 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
         userStateForAi = testState.getState(greenInstanceDbId, key);
         if (userStateForAi) break;
       }
-      const contactData = await getContactPayloadByPhone(
-        greenInstanceDbId,
-        norm,
-        userStateForAi?.campaignId,
-      );
       const aiResult = await generateAiReply({
         incomingText: parsed.text,
         intentType: intent.type,
         userState: userStateForAi,
         phoneDigits: norm,
         greenInstanceDbId,
-        contactData,
-        recentInbound: userStateForAi?.recentInbound || [],
       });
 
       if (aiResult.replyText && parsed.chatId) {
@@ -384,8 +367,7 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
           },
           'reply',
         );
-        if (aiSend.queued === true) {
-          aiReplySent = true;
+        if (aiSend.queued) {
           console.log('[AI Reply] queued for', parsed.phone, '| text:', aiResult.replyText.slice(0, 50));
         }
       }

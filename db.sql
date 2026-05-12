@@ -101,8 +101,7 @@ CREATE TABLE `conversation_state` (
   `last_inbound_at` datetime(3) DEFAULT NULL,
   `followup_step` int NOT NULL DEFAULT '0',
   `followup_next_at` datetime(3) DEFAULT NULL,
-  `followup_cancelled` tinyint(1) NOT NULL DEFAULT '0',
-  `inbound_history_json` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL
+  `followup_cancelled` tinyint(1) NOT NULL DEFAULT '0'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
