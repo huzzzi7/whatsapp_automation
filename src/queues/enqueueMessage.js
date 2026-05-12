@@ -9,8 +9,9 @@ const log = createLogger('worker');
 /**
  * @param {object} payload
  * @param {'message'|'reply'|'warmup'} [queueTarget]
+ * @param {{ delayMs?: number }} [execOpts] - BullMQ delay so jobs run after sequence sends (strict WhatsApp ordering)
  */
-async function enqueueMessage(payload, queueTarget = 'message') {
+async function enqueueMessage(payload, queueTarget = 'message', execOpts = {}) {
   // Deterministic jobId: same contact + same sequence step always produces same id.
   // This lets BullMQ naturally reject duplicate enqueues for the same contact in the same campaign.
   // For campaign messages: greenInstanceDbId-phone-messageCount-campaignId
@@ -20,12 +21,16 @@ async function enqueueMessage(payload, queueTarget = 'message') {
     ? `${payload.greenInstanceDbId || 'x'}-${payload.phoneDigits || payload.chatId}-${payload.messageCount ?? 0}-${payload.campaignId}`
     : `${payload.greenInstanceDbId || 'x'}-${payload.phoneDigits || payload.chatId}-${payload.messageCount ?? 0}-${Date.now()}`;
 
+  const delayRaw = execOpts.delayMs != null ? Number(execOpts.delayMs) : 0;
+  const delay = Number.isFinite(delayRaw) && delayRaw > 0 ? Math.floor(delayRaw) : undefined;
+
   const jobOptions = {
     jobId,
     removeOnComplete: { count: 20 },
     removeOnFail: { count: 50 },
     attempts: 3,
     backoff: { type: 'exponential', delay: 5000 },
+    ...(delay != null ? { delay } : {}),
   };
 
   // Pre-enqueue dedup: if a job with this deterministic id already exists in any active state, skip.

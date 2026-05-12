@@ -34,9 +34,21 @@ function optOutSignal(text) {
  * @param {object|null} params.userState
  * @param {string} params.phoneDigits
  * @param {string} params.greenInstanceDbId
+ * @param {object|null|undefined} params.contactData
+ * @param {string[]|undefined} params.recentInbound
+ * @param {string|undefined} params.lastSequenceMessageSent - scripted template just sent this inbound turn
  * @returns {Promise<{ replyText: string|null, blockSequence: boolean, error: string|null }>}
  */
-async function generateAiReply({ incomingText, intentType, userState, phoneDigits, greenInstanceDbId }) {
+async function generateAiReply({
+  incomingText,
+  intentType,
+  userState,
+  phoneDigits,
+  greenInstanceDbId,
+  contactData,
+  recentInbound,
+  lastSequenceMessageSent,
+}) {
   try {
     if (!isAiEnabled()) return { replyText: null, blockSequence: false, error: null };
     if (String(process.env.OPENAI_API_KEY || '').trim() === '')
@@ -51,7 +63,6 @@ async function generateAiReply({ incomingText, intentType, userState, phoneDigit
     const text = String(incomingText || '').trim();
     if (!text) return { replyText: null, blockSequence: false, error: null };
 
-    // Hard safety: if inbound itself is opt-out-ish, don't proceed with AI reply here.
     if (optOutSignal(text)) return { replyText: null, blockSequence: true, error: null };
 
     const model = String(process.env.OPENAI_MODEL || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
@@ -62,20 +73,51 @@ async function generateAiReply({ incomingText, intentType, userState, phoneDigit
     const timeoutMs = process.env.AI_TIMEOUT_MS;
 
     const step = userState && Number.isFinite(Number(userState.lastSentIndex)) ? Math.floor(Number(userState.lastSentIndex)) : 0;
+    const university = contactData?.university || 'uni';
+
+    let toneInstruction;
+    if (step <= 2) {
+      toneInstruction =
+        'You are just getting to know them. Be curious and casual. Ask one question back.';
+    } else if (step <= 4) {
+      toneInstruction =
+        'You are warming up. Be friendly and mention you have found some good groups.';
+    } else {
+      toneInstruction =
+        'You are close enough to invite them. Mention the group or event naturally like a friend would.';
+    }
+
+    const historyLines =
+      (Array.isArray(recentInbound) ? recentInbound : [])
+        .slice(-3)
+        .map((t, i) => `  [${i + 1}] ${t}`)
+        .join('\n') || '  (no prior messages)';
 
     const systemPrompt = [
-      'You are a student helping a friend navigate freshers week opportunities.',
-      'You are NOT an AI — never say you are a bot, AI, or automated system.',
-      'You are texting casually like a peer, not a recruiter or assistant.',
-      'Keep replies under 12 words, warm, curious, and natural.',
-      'Never mention company names, links, or university names.',
-      'Never answer questions about who you are — deflect casually like a real person would.',
+      'You are Alex, a 20-year-old university student who just transferred to a new campus.',
+      `You are studying at ${university} and genuinely excited to meet people and find your crowd.`,
+      'You text like a real student: casual, warm, curious, occasionally funny.',
+      'You use light emojis naturally — not in every message, just when it fits.',
+      'You are NOT an AI. Never say you are a bot, AI, or automated system.',
+      'If someone asks if you are a bot or AI, laugh it off naturally like a real person would.',
+      'Never sound like a recruiter, promoter, or assistant.',
+      'Never mention company names, ticket prices, or formal event names.',
+      toneInstruction,
       'Reply only with the message text — no quotes, no labels, no explanations.',
     ].join(' ');
 
-    const userContent = `Student replied: ${text}
-Conversation context: step ${step} of 6
-Intent detected: ${type}`;
+    const seqLine =
+      lastSequenceMessageSent != null && String(lastSequenceMessageSent).trim() !== ''
+        ? String(lastSequenceMessageSent).trim()
+        : '(none — template did not send this turn)';
+    const userContent = [
+      `University context: ${university}`,
+      `Conversation step: ${step} of 6`,
+      `Last scripted template message we sent them just before you reply (follow its vibe; do not contradict it): ${seqLine}`,
+      `Recent messages from this user:\n${historyLines}`,
+      `Their latest message: ${text}`,
+      `Intent: ${type}`,
+    ].join('\n');
 
     const call = getOpenAiClient().chat.completions.create({
       model,
@@ -89,20 +131,23 @@ Intent detected: ${type}`;
 
     const resp = await withTimeout(call, timeoutMs, 'ai_reply_timeout');
     const raw = resp?.choices?.[0]?.message?.content != null ? String(resp.choices[0].message.content) : '';
-    const replyText = raw.trim().replace(/\s+/g, ' ');
-    if (!replyText) return { replyText: null, blockSequence: false, error: null };
+    const trimmed = raw.trim().replace(/\s+/g, ' ');
+    if (!trimmed) return { replyText: null, blockSequence: false, error: null };
 
-    // Hard cap: truncate to 15 words max
-    const words = replyText.split(/\s+/).filter(Boolean);
-    const capped = words.length > 15 ? words.slice(0, 15).join(' ') : replyText;
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    const wordCap = step >= 3 ? 20 : 15;
+    const capped = words.length > wordCap ? words.slice(0, wordCap).join(' ') : trimmed;
+
     const finalReply = capped
-      .toLowerCase()
-      .replace(/[^a-z0-9\s']/g, '')
+      .replace(/https?:\/\/\S+/gi, '')
+      .replace(/[\u0000-\u001F\u007F]/g, '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/[<>]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
+
     if (!finalReply) return { replyText: null, blockSequence: false, error: null };
 
-    // If model output accidentally contains opt-out signal, don't send; optionally stop sequence.
     if (optOutSignal(finalReply)) {
       return { replyText: null, blockSequence: true, error: null };
     }
@@ -122,4 +167,3 @@ Intent detected: ${type}`;
 }
 
 module.exports = { generateAiReply };
-

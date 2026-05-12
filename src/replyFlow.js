@@ -48,6 +48,9 @@ function pickRandomMessage(message) {
   return message;
 }
 
+/** When no campaign template was sent this turn (webhook uses this for AI ordering / context). */
+const NO_SEQUENCE_SEND = Object.freeze({ sent: false, sentTemplateText: null, stepIndex: null });
+
 function getMessageCooldownMs() {
   const raw = parseInt(process.env.MESSAGE_COOLDOWN_MS || '120000', 10);
   if (!Number.isFinite(raw) || raw < 0) return 120000;
@@ -323,13 +326,13 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
   const flow = logWebhook.child({ logPrefix });
   if (!greenApi || !greenInstanceDbId) {
     flow.error({ event: 'reply_flow_missing_config' }, 'Missing greenApi or greenInstanceDbId');
-    return;
+    return NO_SEQUENCE_SEND;
   }
 
   flow.debug({ event: 'incoming_reply_phone', phone, greenInstanceDbId }, 'Incoming reply');
 
   let normalized = String(phone || '').replace(/\D/g, '');
-  if (!normalized) return;
+  if (!normalized) return NO_SEQUENCE_SEND;
 
   const possibleKeys = [normalized, normalized.replace(/^0+/, '')];
   const uniqueKeys = [...new Set(possibleKeys.filter((k) => k && k.length > 0))];
@@ -345,7 +348,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
 
   if (userState == null) {
     flow.debug({ event: 'unknown_phone_ignored', phone }, 'Unknown phone ignored');
-    return;
+    return NO_SEQUENCE_SEND;
   }
 
   const trace = flow.child({
@@ -375,7 +378,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
         'reply blocked: user stopped, no restart phrase',
       );
       trace.debug({ event: 'skipped_user_stopped_opt_out' }, 'skipped user_stopped_opt_out');
-      return;
+      return NO_SEQUENCE_SEND;
     }
   }
 
@@ -387,19 +390,19 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
       'reply blocked: sequence empty or missing in state',
     );
     store.deleteState(greenInstanceDbId, normalized);
-    return;
+    return NO_SEQUENCE_SEND;
   }
 
   if (userState.lastSentIndex >= sequence.length) {
     store.deleteState(greenInstanceDbId, normalized);
-    return;
+    return NO_SEQUENCE_SEND;
   }
 
   const nextIndex = userState.lastSentIndex;
   if (nextIndex >= sequence.length) {
     trace.error({ event: 'invalid_conversation_state', normalized }, 'Invalid conversation state');
     store.deleteState(greenInstanceDbId, normalized);
-    return;
+    return NO_SEQUENCE_SEND;
   }
 
   const text = sequence[nextIndex];
@@ -411,7 +414,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
       );
       if (!advance.success) {
         trace.debug({ event: 'lock_race_empty_message_branch' }, 'Skipped duplicate execution (race)');
-        return;
+        return NO_SEQUENCE_SEND;
       }
       trace.debug({ event: 'lock_acquired_empty_message_branch', normalized }, 'Lock acquired');
       if (newIndex >= sequence.length) {
@@ -426,28 +429,30 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
         store.updateLastSent(greenInstanceDbId, normalized, newIndex);
       }
     }
-    return;
+    return NO_SEQUENCE_SEND;
   }
 
   const chatId = toChatId(normalized);
-  if (!chatId) return;
+  if (!chatId) return NO_SEQUENCE_SEND;
 
   const currentIndex = userState.lastSentIndex;
   const lockKey = buildInFlightKey(greenInstanceDbId, normalized, currentIndex);
   const lockAcquired = acquireInFlightLock(lockKey);
   if (lockAcquired === false) {
     trace.debug({ event: 'lock_blocked_duplicate', lockKey }, 'Duplicate send blocked');
-    return;
+    return NO_SEQUENCE_SEND;
   }
   trace.debug({ event: 'lock_acquired', lockKey }, 'Lock acquired');
   // MOVED POST-SEND to prevent sequence skip bug
+
+  const templateForSend = pickRandomMessage(text);
 
   try {
     trace.debug(
       { event: 'template_send_start', sequenceIndex: currentIndex, seqLen: sequence.length },
       'Sending sequence message',
     );
-    const sendResult = await safeSend(chatId, text, greenApi, {
+    const sendResult = await safeSend(chatId, templateForSend, greenApi, {
       store,
       greenInstanceDbId,
       phone: normalized,
@@ -463,7 +468,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
       } else {
         trace.debug({ event: 'send_failed_index_unchanged' }, 'Index not advanced due to failed send');
       }
-      return;
+      return NO_SEQUENCE_SEND;
     }
 
     trace.debug({ event: 'send_success_advancing' }, 'Send success, advancing index');
@@ -474,7 +479,7 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
       );
       if (!advancePostSend.success) {
         trace.debug({ event: 'lock_race_post_send' }, 'Skipped duplicate execution post-send');
-        return;
+        return NO_SEQUENCE_SEND;
       }
       trace.debug({ event: 'lock_acquired_post_send', normalized }, 'Lock acquired post-send');
       if (newIndex >= sequence.length) {
@@ -508,6 +513,12 @@ async function runIncomingReply(phone, opts, store, logPrefix) {
         logger.warn('[ReplyFlow] updateOutboundMeta failed (non-fatal):', err.message);
       }
     }
+
+    return {
+      sent: true,
+      sentTemplateText: templateForSend != null ? String(templateForSend).trim() : '',
+      stepIndex: currentIndex,
+    };
   } finally {
     releaseInFlightLock(lockKey);
     trace.debug({ event: 'lock_released', lockKey }, 'Lock released');

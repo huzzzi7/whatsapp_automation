@@ -15,7 +15,8 @@ const state = require('./state');
 const testState = require('./testState');
 const { insertIncomingMessage } = require('./repositories/incomingMessageRepository');
 const { clearAllQueuesForInstance } = require('./services/instanceQueueGuard');
-const { updateInboundMeta } = require('./repositories/conversationStateRepository');
+const { updateInboundMeta, appendInboundHistory } = require('./repositories/conversationStateRepository');
+const { getContactPayloadByPhone } = require('./repositories/campaignRepository');
 const { logger } = require('./utils/logger');
 
 /**
@@ -205,11 +206,23 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   }
   console.log('[DEDUPE_RESULT] inserted');
 
+  const norm = String(parsed.phone || '').replace(/\D/g, '');
+  const keyVariants = [...new Set([norm, norm.replace(/^0+/, '')].filter((k) => k && k.length > 0))];
+
   // Best-effort: record inbound timestamp for follow-up cancellation
   try {
     await updateInboundMeta(greenInstanceDbId, parsed.phone, { lastInboundAt: Date.now() });
   } catch (err) {
     logger.warn('[Webhook] updateInboundMeta failed (non-fatal):', err.message);
+  }
+
+  try {
+    const trimmedInbound = String(parsed.text || '').trim();
+    if (trimmedInbound) {
+      await appendInboundHistory(greenInstanceDbId, norm, trimmedInbound);
+    }
+  } catch (err) {
+    logger.warn('[Webhook] appendInboundHistory failed (non-fatal):', err.message);
   }
 
   const intent = await detectIntentAi(parsed.text);
@@ -218,9 +231,6 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     '[INTENT_RESULT]',
     `type=${intent.type} stopSequence=${intent.stopSequence} reply=${intent.reply ? 'yes' : 'no'}`,
   );
-
-  const norm = String(parsed.phone || '').replace(/\D/g, '');
-  const keyVariants = [...new Set([norm, norm.replace(/^0+/, '')].filter((k) => k && k.length > 0))];
 
   async function persistStoppedStatus() {
     for (const key of keyVariants) {
@@ -325,12 +335,31 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Test state exists:', hasTest);
   console.log('[Webhook] Prod state exists:', hasProd);
 
+  const hadState = hasTest || hasProd;
+  const emptySeqTurn = { sent: false, sentTemplateText: null, stepIndex: null };
+  let sequenceTurn = emptySeqTurn;
+
+  // 1) Campaign template (sequence) first — advances lastSentIndex in state
+  if (!intentReplySent && hadState) {
+    try {
+      if (hasTest) {
+        sequenceTurn = (await onIncomingReplyTest(parsed.phone, replyOpts)) || emptySeqTurn;
+        console.log('[REPLY_FLOW] executed test path');
+      } else if (hasProd) {
+        sequenceTurn = (await onIncomingReply(parsed.phone, replyOpts)) || emptySeqTurn;
+        console.log('[REPLY_FLOW] executed prod path');
+      }
+    } catch (replyFlowErr) {
+      logger.warn('[Webhook] onIncomingReply failed (non-fatal):', replyFlowErr?.message || String(replyFlowErr));
+    }
+  }
+
+  // 2) UNKNOWN-only AI second — delayed after template job so WhatsApp usually shows sequence before Alex
   const shouldUseAiReply = String(intent.type || '').toUpperCase() === 'UNKNOWN';
-  let aiReplySent = false;
   if (
     shouldUseAiReply &&
     !intentReplySent &&
-    (hasTest || hasProd) &&
+    hadState &&
     intent.reply === null &&
     intent.stopSequence === false
   ) {
@@ -342,16 +371,29 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
         userStateForAi = testState.getState(greenInstanceDbId, key);
         if (userStateForAi) break;
       }
+      const contactData = await getContactPayloadByPhone(
+        greenInstanceDbId,
+        norm,
+        userStateForAi?.campaignId,
+      );
       const aiResult = await generateAiReply({
         incomingText: parsed.text,
         intentType: intent.type,
         userState: userStateForAi,
         phoneDigits: norm,
         greenInstanceDbId,
+        contactData,
+        recentInbound: userStateForAi?.recentInbound || [],
+        lastSequenceMessageSent: sequenceTurn.sent ? sequenceTurn.sentTemplateText : undefined,
       });
 
       if (aiResult.replyText && parsed.chatId) {
         const meta = await getPipelineMetaForPhone(greenInstanceDbId, keyVariants);
+        const delayParsed = parseInt(String(process.env.AI_AFTER_SEQUENCE_DELAY_MS || '12000'), 10);
+        const delayMs =
+          sequenceTurn.sent === true
+            ? Math.max(0, Number.isFinite(delayParsed) ? delayParsed : 12000)
+            : 0;
         const aiSend = await enqueueMessage(
           {
             instanceId: greenApi.instanceId,
@@ -366,9 +408,17 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
             phoneDigits: String(parsed.phone || ''),
           },
           'reply',
+          delayMs > 0 ? { delayMs } : {},
         );
-        if (aiSend.queued) {
-          console.log('[AI Reply] queued for', parsed.phone, '| text:', aiResult.replyText.slice(0, 50));
+        if (aiSend.queued === true) {
+          console.log(
+            '[AI Reply] queued for',
+            parsed.phone,
+            '| delayMs:',
+            delayMs,
+            '| text:',
+            aiResult.replyText.slice(0, 50),
+          );
         }
       }
 
@@ -381,12 +431,14 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
       console.error('[AI Reply] block failed (sequence continues):', aiErr.message);
     }
   }
+
   console.log('[REPLYFLOW_CHECK]', {
     hasTest,
     hasProd,
     phone: parsed.phone,
     keyVariants,
     instanceId: greenInstanceDbId,
+    sequenceSentThisTurn: sequenceTurn.sent,
   });
   if (!hasTest && !hasProd) {
     console.log('[REPLYFLOW_SKIPPED_REASON]', {
@@ -404,21 +456,7 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
   console.log('[Webhook] Comparing instanceId with state keys');
   console.log('[Webhook] Prod state keys:', Object.keys(state.loadState()));
   console.log('[Webhook] Test state keys:', Object.keys(testState.loadState()));
-  if (hasTest) {
-    if (intentReplySent || aiReplySent) {
-      console.log('Sequence skipped due to intent/AI reply');
-    } else {
-      console.log('[REPLY_FLOW] executing test path');
-      await onIncomingReplyTest(parsed.phone, replyOpts);
-    }
-  } else if (hasProd) {
-    if (intentReplySent || aiReplySent) {
-      console.log('Sequence skipped due to intent/AI reply');
-    } else {
-      console.log('[REPLY_FLOW] executing prod path');
-      await onIncomingReply(parsed.phone, replyOpts);
-    }
-  } else {
+  if (!hadState) {
     console.log('[REPLY_FLOW] skipped reason=no_conversation_state');
   }
 }
