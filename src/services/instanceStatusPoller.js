@@ -3,6 +3,7 @@ const { resolveGreenApiConfig } = require('../greenInstance');
 const { getStateInstance, getWaSettings } = require('../greenapi');
 const { createLogger } = require('../utils/logger');
 const { isAuthorizedGreenInstanceState } = require('../utils/greenInstanceAuthState');
+const { clearAllQueuesForInstance } = require('./instanceQueueGuard');
 
 const log = createLogger('instancePoller');
 let pollerInterval = null;
@@ -40,6 +41,14 @@ async function pollSingleInstance(row) {
 
     const dbPhoneDigits = String(row.phoneNumber || '').replace(/\D/g, '');
     if (newPhoneDigits != null && newPhoneDigits !== dbPhoneDigits) {
+      try {
+        await clearAllQueuesForInstance(row, 'phone_swap_detected');
+      } catch (err) {
+        log.error(
+          { event: 'phone_swap_guard_failed', instanceId: row.id, err: err?.message || String(err) },
+          'Phone swap queue guard failed',
+        );
+      }
       await pool.execute(
         `UPDATE green_instances
          SET authStatus = ?, isActive = IF(manualDisabled = 1, 0, ?),

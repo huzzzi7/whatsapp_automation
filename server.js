@@ -4,12 +4,11 @@
  */
 require('dotenv').config();
 const { logger } = require('./src/utils/logger');
-const { messageQueue, replyQueue, followupQueue } = require('./src/queues');
+const { messageQueue, replyQueue } = require('./src/queues');
 const { closeWorkers } = require('./src/queues/messageWorker');
 const { closeCoordinatorWorker } = require('./src/queues/coordinatorWorker');
 const { closeWarmupWorker } = require('./src/queues/warmupWorker');
 const { registerCoordinatorJob } = require('./src/queues/registerCoordinatorJob');
-const { registerFollowupSchedulerJob } = require('./src/queues/registerFollowupSchedulerJob');
 const { registerWarmupScheduleJobs } = require('./src/queues/registerWarmupScheduleJobs');
 const express = require('express');
 const session = require('express-session');
@@ -112,8 +111,6 @@ app.use((req, res, next) => {
 
 // Ensure WarmupWorker is bound (Phase 5)
 require('./src/queues/warmupWorker');
-// Ensure Phase 6 followup scheduler worker is bound
-require('./src/queues/followupSchedulerWorker');
 
 function testBanner() {
   console.log('=============================');
@@ -1929,9 +1926,6 @@ function startListening() {
     require('./src/queues/coordinatorWorker');
     registerCoordinatorJob().catch((err) =>
       logger.error({ err: err.message, event: 'coordinator_register_failed' }, 'Failed to register coordinator job'),
-    );
-    registerFollowupSchedulerJob().catch((err) =>
-      logger.error('[Server] registerFollowupSchedulerJob failed:', err),
     );
     registerWarmupScheduleJobs().catch((err) =>
       logger.error({ err: err?.message || String(err), event: 'warmup_schedule_register_failed' }, 'warmup schedule register failed'),

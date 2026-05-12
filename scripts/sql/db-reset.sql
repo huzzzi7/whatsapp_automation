@@ -13,7 +13,6 @@ DROP TABLE IF EXISTS warmup_pairs;
 DROP TABLE IF EXISTS warmup_sessions;
 DROP TABLE IF EXISTS campaign_contacts;
 DROP TABLE IF EXISTS campaigns;
-DROP TABLE IF EXISTS followup_jobs;
 DROP TABLE IF EXISTS conversation_state;
 DROP TABLE IF EXISTS incoming_messages_log;
 
@@ -86,25 +85,6 @@ CREATE TABLE IF NOT EXISTS conversation_state (
   followup_cancelled TINYINT(1) NOT NULL DEFAULT 0,
   UNIQUE KEY uniq_state (green_instance_db_id, phone_normalized),
   KEY idx_conversation_state_updated (green_instance_db_id, updated_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS followup_jobs (
-  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-  green_instance_db_id VARCHAR(64) NOT NULL,
-  phone_normalized VARCHAR(32) NOT NULL,
-  campaign_id VARCHAR(255) NULL,
-  step INT NOT NULL,
-  status ENUM('queued','sent','cancelled','failed') NOT NULL DEFAULT 'queued',
-  due_at DATETIME(3) NOT NULL,
-  enqueued_at DATETIME(3) NULL,
-  sent_at DATETIME(3) NULL,
-  cancelled_at DATETIME(3) NULL,
-  last_error TEXT NULL,
-  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-  KEY idx_followup_due (status, due_at),
-  KEY idx_followup_instance_phone (green_instance_db_id, phone_normalized),
-  UNIQUE KEY uniq_followup_active (green_instance_db_id, phone_normalized, step, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS warmup_sessions (

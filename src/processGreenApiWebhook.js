@@ -14,10 +14,8 @@ const { generateAiReply } = require('./services/aiReplyService');
 const state = require('./state');
 const testState = require('./testState');
 const { insertIncomingMessage } = require('./repositories/incomingMessageRepository');
-const { clearMessagesQueue } = require('./greenapi');
-const { clearPauseFlag, clearDepthCache } = require('./services/greenQueueMonitor');
-const { updateInboundMeta, setFollowupState } = require('./repositories/conversationStateRepository');
-const { cancelPendingForConversation } = require('./repositories/followupRepository');
+const { clearAllQueuesForInstance } = require('./services/instanceQueueGuard');
+const { updateInboundMeta } = require('./repositories/conversationStateRepository');
 const { logger } = require('./utils/logger');
 
 /**
@@ -126,15 +124,12 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
         `[Webhook] Instance reconnected — auto-clearing queue for instanceId=${greenApi.instanceId}`,
       );
       try {
-        await clearMessagesQueue(greenApi);
+        await clearAllQueuesForInstance(row, 'authorization_guard');
       } catch (err) {
-        console.error('[Webhook] Auto clearMessagesQueue failed:', err.message);
-      }
-      try {
-        await clearPauseFlag(greenApi.instanceId);
-        clearDepthCache(greenApi.instanceId);
-      } catch (err) {
-        console.error('[Webhook] Auto clear local state failed:', err.message);
+        logger.error(
+          { event: 'authorization_guard_failed', greenInstanceDbId, err: err?.message || String(err) },
+          'Authorization queue guard failed',
+        );
       }
     }
 
@@ -217,18 +212,6 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
     logger.warn('[Webhook] updateInboundMeta failed (non-fatal):', err.message);
   }
 
-  // Cancel any pending follow-ups since user replied
-  try {
-    await cancelPendingForConversation(greenInstanceDbId, parsed.phone);
-    await setFollowupState(greenInstanceDbId, parsed.phone, {
-      followupStep: 0,
-      followupNextAt: null,
-      followupCancelled: 1,
-    });
-  } catch (err) {
-    logger.warn('[Webhook] followup cancellation failed (non-fatal):', err.message);
-  }
-
   const intent = await detectIntentAi(parsed.text);
   let intentReplySent = false;
   console.log(
@@ -284,17 +267,6 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
       }
     }
     await persistStoppedStatus();
-    // Explicit opt-out clarity: cancel any pending follow-ups
-    try {
-      await cancelPendingForConversation(greenInstanceDbId, parsed.phone);
-      await setFollowupState(greenInstanceDbId, parsed.phone, {
-        followupStep: 0,
-        followupNextAt: null,
-        followupCancelled: 1,
-      });
-    } catch (err) {
-      logger.warn('[Webhook] followup cancellation failed (non-fatal):', err.message);
-    }
     console.log('[Intent] Sequence stopped for', parsed.phone);
     return;
   }

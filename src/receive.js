@@ -23,6 +23,10 @@ function parseIncomingNotification(body) {
 
   const rawChatId = String(payload.senderData.chatId).trim();
   console.log('[Webhook] Raw chatId:', rawChatId);
+  if (rawChatId.toLowerCase().endsWith('@g.us')) {
+    console.log('[Webhook] Ignoring group message chatId=' + rawChatId);
+    return null;
+  }
 
   const digits = rawChatId.replace(/@c\.us$/i, '').replace(/\D/g, '');
   const normalized = normalizePhone(digits, config.defaultCountryCode);

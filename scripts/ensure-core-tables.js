@@ -221,8 +221,7 @@ async function runCoreMigrations() {
 
   await ensureIncomingMessagesDedupeKey(conn);
   await ensureConversationStateStatusColumn(conn);
-  await ensureFollowupColumns(conn);
-  await ensureFollowupJobsTable(conn);
+  await ensureConversationTimingColumns(conn);
   await ensureCampaignScheduleColumns(conn);
   await ensureCampaignContactsAssignmentColumn(conn);
 
@@ -277,8 +276,8 @@ async function ensureConversationStateStatusColumn(conn) {
   }
 }
 
-/** Add Phase 6 follow-up columns to conversation_state (idempotent). */
-async function ensureFollowupColumns(conn) {
+/** Add conversation timing columns to conversation_state (idempotent). */
+async function ensureConversationTimingColumns(conn) {
   const [dbRows] = await conn.query('SELECT DATABASE() AS d');
   const schema = dbRows[0]?.d;
   if (!schema) return;
@@ -301,48 +300,6 @@ async function ensureFollowupColumns(conn) {
     console.log('MIGRATE: conversation_state — adding last_inbound_at column');
     await conn.query('ALTER TABLE conversation_state ADD COLUMN last_inbound_at DATETIME(3) NULL');
   }
-
-  if (!(await hasColumn('followup_step'))) {
-    console.log('MIGRATE: conversation_state — adding followup_step column');
-    await conn.query('ALTER TABLE conversation_state ADD COLUMN followup_step INT NOT NULL DEFAULT 0');
-  }
-
-  if (!(await hasColumn('followup_next_at'))) {
-    console.log('MIGRATE: conversation_state — adding followup_next_at column');
-    await conn.query('ALTER TABLE conversation_state ADD COLUMN followup_next_at DATETIME(3) NULL');
-  }
-
-  if (!(await hasColumn('followup_cancelled'))) {
-    console.log('MIGRATE: conversation_state — adding followup_cancelled column');
-    await conn.query(
-      'ALTER TABLE conversation_state ADD COLUMN followup_cancelled TINYINT(1) NOT NULL DEFAULT 0',
-    );
-  }
-}
-
-/** Ensure followup_jobs exists (Phase 6). */
-async function ensureFollowupJobsTable(conn) {
-  await conn.query(
-    `CREATE TABLE IF NOT EXISTS followup_jobs (
-      id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-      green_instance_db_id VARCHAR(64) NOT NULL,
-      phone_normalized    VARCHAR(32) NOT NULL,
-      campaign_id         VARCHAR(255) NULL,
-      step                INT NOT NULL,
-      status              ENUM('queued','sent','cancelled','failed') NOT NULL DEFAULT 'queued',
-      due_at              DATETIME(3) NOT NULL,
-      enqueued_at         DATETIME(3) NULL,
-      sent_at             DATETIME(3) NULL,
-      cancelled_at        DATETIME(3) NULL,
-      last_error          TEXT NULL,
-      created_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-      updated_at          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
-                          ON UPDATE CURRENT_TIMESTAMP(3),
-      KEY idx_followup_due (status, due_at),
-      KEY idx_followup_instance_phone (green_instance_db_id, phone_normalized),
-      UNIQUE KEY uniq_followup_active (green_instance_db_id, phone_normalized, step, status)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
-  );
 }
 
 async function ensureCampaignScheduleColumns(conn) {

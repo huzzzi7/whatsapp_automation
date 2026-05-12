@@ -107,28 +107,6 @@ CREATE TABLE `conversation_state` (
 -- --------------------------------------------------------
 
 --
--- Table structure for table `followup_jobs`
---
-
-CREATE TABLE `followup_jobs` (
-  `id` bigint UNSIGNED NOT NULL,
-  `green_instance_db_id` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `phone_normalized` varchar(32) COLLATE utf8mb4_unicode_ci NOT NULL,
-  `campaign_id` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
-  `step` int NOT NULL,
-  `status` enum('queued','sent','cancelled','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'queued',
-  `due_at` datetime(3) NOT NULL,
-  `enqueued_at` datetime(3) DEFAULT NULL,
-  `sent_at` datetime(3) DEFAULT NULL,
-  `cancelled_at` datetime(3) DEFAULT NULL,
-  `last_error` text COLLATE utf8mb4_unicode_ci,
-  `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  `updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- --------------------------------------------------------
-
---
 -- Table structure for table `green_instances`
 --
 
@@ -320,15 +298,6 @@ ALTER TABLE `conversation_state`
   ADD KEY `idx_conversation_state_updated` (`green_instance_db_id`,`updated_at`);
 
 --
--- Indexes for table `followup_jobs`
---
-ALTER TABLE `followup_jobs`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `uniq_followup_active` (`green_instance_db_id`,`phone_normalized`,`step`,`status`),
-  ADD KEY `idx_followup_due` (`status`,`due_at`),
-  ADD KEY `idx_followup_instance_phone` (`green_instance_db_id`,`phone_normalized`);
-
---
 -- Indexes for table `green_instances`
 --
 ALTER TABLE `green_instances`
@@ -400,12 +369,6 @@ ALTER TABLE `campaign_contacts`
 --
 ALTER TABLE `conversation_state`
   MODIFY `id` bigint NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT for table `followup_jobs`
---
-ALTER TABLE `followup_jobs`
-  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- AUTO_INCREMENT for table `incoming_messages_log`

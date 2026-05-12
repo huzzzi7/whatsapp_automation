@@ -257,17 +257,15 @@ async function sendFirstMessageOnlyWithStore(users, config, opts, store, campaig
     });
     if (sendResult.ok) {
       const now = Date.now();
-      const followupNextAt = now + 6 * 60 * 60 * 1000;
       store.setState(greenInstanceDbId, phoneDigits, {
         lastSentIndex: 1,
         sequence,
         campaignId,
         lastOutboundAt: now,
-        followupNextAt,
         status: 'active',
       });
       try {
-        await updateOutboundMeta(greenInstanceDbId, phoneDigits, { lastOutboundAt: now, followupNextAt });
+        await updateOutboundMeta(greenInstanceDbId, phoneDigits, { lastOutboundAt: now });
       } catch (err) {
         logger.warn('[ReplyFlow] updateOutboundMeta failed (non-fatal):', err.message);
       }
