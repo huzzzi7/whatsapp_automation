@@ -227,6 +227,7 @@ module.exports = {
   clearMessagesQueue,
   getStateInstance,
   getWaSettings,
+  assertValidChatIdForGreenApiSend,
 };
 
 /** Phase 2.2 self-test: `node src/greenapi.js` — five runs, mock chatId, logs duration and timestamps. */
