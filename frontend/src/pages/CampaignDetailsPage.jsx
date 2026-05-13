@@ -121,16 +121,29 @@ function ProgressBar({ percent }) {
   );
 }
 
-/** Progress = (sent + failed + skipped) / total; supports legacy API shape. */
+/** Progress: prefers live pendingCount from API; caps at 99% until terminal status. */
 function campaignProgressPercent(c) {
   const t = Number(c.totalContacts) || 0;
   if (!t) return 0;
+  const st = String(c.status || '').toLowerCase();
+  const terminal = ['completed', 'stopped', 'failed'].includes(st);
+
+  if (c.pendingCount != null && Number.isFinite(Number(c.pendingCount))) {
+    const pend = Math.max(0, Math.floor(Number(c.pendingCount)));
+    let pct = Number((((t - pend) / t) * 100).toFixed(2));
+    if (!Number.isFinite(pct)) pct = 0;
+    if (!terminal && pct >= 100) pct = 99;
+    return Math.min(100, Math.max(0, pct));
+  }
+
   const sent = Number(c.sentCount) || 0;
   let failed = Number(c.failedCount);
   let skipped = Number(c.skippedCount);
   if (!Number.isFinite(failed)) failed = Number(c.failedOrSkippedCount) || 0;
   if (!Number.isFinite(skipped)) skipped = 0;
-  return Math.min(100, Number((((sent + failed + skipped) / t) * 100).toFixed(2)));
+  let pct = Math.min(100, Number((((sent + failed + skipped) / t) * 100).toFixed(2)));
+  if (!terminal && pct >= 100) pct = 99;
+  return pct;
 }
 
 function campaignFailedCount(c) {
@@ -239,10 +252,13 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
                 <InfoModalRow label="Failed" value={String(campaignFailedCount(campaign))} />
                 <InfoModalRow label="Skipped" value={String(campaignSkippedCount(campaign))} />
                 <InfoModalRow label="Remaining" value={String(campaign.remaining ?? 0)} />
-                <InfoModalRow
-                  label="% complete"
-                  value={`${campaign.percentComplete != null && Number.isFinite(Number(campaign.percentComplete)) ? campaign.percentComplete : campaignProgressPercent(campaign)}%`}
-                />
+                {campaign.pendingCount != null ? (
+                  <InfoModalRow label="Pending contacts" value={String(campaign.pendingCount)} />
+                ) : null}
+                {campaign.deliveredCount != null ? (
+                  <InfoModalRow label="Delivered (confirmed)" value={String(campaign.deliveredCount)} />
+                ) : null}
+                <InfoModalRow label="% complete" value={`${campaignProgressPercent(campaign)}%`} />
                 <InfoModalRow
                   label="Daily limit per instance"
                   value={campaign.dailyLimitPerInstance != null && campaign.dailyLimitPerInstance !== '' ? String(campaign.dailyLimitPerInstance) : '—'}

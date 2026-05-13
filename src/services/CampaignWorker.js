@@ -18,6 +18,8 @@ const {
   incrementFailedCount,
   incrementSkippedCount,
   updateCampaignStatus,
+  countPendingContacts,
+  getGreenInstanceById,
 } = require('../repositories/campaignRepository');
 const { createLogger } = require('../utils/logger');
 
@@ -174,6 +176,26 @@ function firstMessageEmpty(user) {
   return text == null || String(text).trim() === '';
 }
 
+/** After long sleeps: exit loop if campaign was paused/stopped elsewhere (e.g. auth guard). */
+async function exitIfCampaignNotRunningAfterSleep(campaignId, campLog, sleptMs, phase) {
+  const ms = Number(sleptMs) || 0;
+  if (ms <= 30000) return false;
+  const fresh = await getCampaignById(campaignId);
+  if (!fresh) return true;
+  if (fresh.status !== 'running') {
+    if (fresh.status === 'paused') {
+      campLog.info({ event: 'campaign_worker_paused', phase }, 'paused after long sleep');
+    } else {
+      campLog.info(
+        { event: 'campaign_worker_stopped_after_sleep', status: fresh.status, phase },
+        'campaign no longer running after long sleep',
+      );
+    }
+    return true;
+  }
+  return false;
+}
+
 async function runCampaignWorker(campaignId, opts = {}) {
   const campaign = await getCampaignById(campaignId);
   if (!campaign) {
@@ -237,6 +259,10 @@ async function runCampaignWorker(campaignId, opts = {}) {
       );
       // eslint-disable-next-line no-await-in-loop
       await sleepMs(sleepFor);
+      // eslint-disable-next-line no-await-in-loop
+      if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, sleepFor, 'after_operational_sleep')) {
+        return;
+      }
       continue;
     }
 
@@ -264,6 +290,10 @@ async function runCampaignWorker(campaignId, opts = {}) {
         );
         // eslint-disable-next-line no-await-in-loop
         await sleepInChunks(msUntil, 12 * 60 * 60 * 1000);
+        // eslint-disable-next-line no-await-in-loop
+        if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, msUntil, 'after_daily_limit_sleep')) {
+          return;
+        }
         continue;
       }
     }
@@ -285,6 +315,22 @@ async function runCampaignWorker(campaignId, opts = {}) {
         `pacing: waiting ${paceMs}ms before next contact`,
       );
       await sleepMs(paceMs);
+      // eslint-disable-next-line no-await-in-loop
+      if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, paceMs, 'after_pace_sleep')) {
+        return;
+      }
+    }
+
+    const giGate = await getGreenInstanceById(greenInstanceDbId);
+    if (!giGate || !giGate.isActive || giGate.manualDisabled) {
+      campLog.warn(
+        { event: 'campaign_instance_unauthorized_stopping', greenInstanceDbId },
+        'instance unauthorized or disabled, pausing campaign worker',
+      );
+      await updateCampaignStatus(campaignId, 'paused', {
+        errorMessage: 'auto_paused: instance went unauthorized during campaign',
+      });
+      return;
     }
 
     const contacts = isMultiInstance
@@ -292,6 +338,15 @@ async function runCampaignWorker(campaignId, opts = {}) {
       : await getPendingContacts(campaignId, batchSize);
 
     if (contacts.length === 0) {
+      // eslint-disable-next-line no-await-in-loop
+      const globalPending = await countPendingContacts(campaignId);
+      if (globalPending > 0) {
+        campLog.info(
+          { event: 'campaign_instance_done_waiting', globalPending, greenInstanceDbId, isMultiInstance },
+          'this instance has no pending work; other contacts still pending globally',
+        );
+        break;
+      }
       await updateCampaignStatus(campaignId, 'completed');
       campLog.info({ event: 'campaign_completed' }, 'completed');
       break;

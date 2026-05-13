@@ -1,10 +1,79 @@
 const pool = require('../mysql');
 const { calculateDailyLimit } = require('./instanceLoadBalancer');
 const { createLogger } = require('../utils/logger');
+const { updateCampaignStatus } = require('../repositories/campaignRepository');
 
 const log = createLogger('recalculator');
 
 async function recalculateActiveCampaigns() {
+  const [snapRows] = await pool.execute(
+    `SELECT COUNT(*) AS total,
+            COALESCE(SUM(CASE WHEN isActive = 1 AND manualDisabled = 0 THEN 1 ELSE 0 END), 0) AS activeCount
+     FROM green_instances`,
+  );
+  const snap = snapRows[0] || { total: 0, activeCount: 0 };
+  const activeCount = Number(snap.activeCount) || 0;
+
+  if (activeCount === 0) {
+    const [running] = await pool.execute(
+      `SELECT id, name, is_multi_instance FROM campaigns WHERE status = 'running'`,
+    );
+    let pausedCount = 0;
+    for (const camp of running || []) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await updateCampaignStatus(camp.id, 'paused', {
+          errorMessage: 'auto_paused: all instances unauthorized',
+        });
+        pausedCount += 1;
+      } catch (err) {
+        log.error(
+          { event: 'pause_all_instances_failed', campaignId: camp.id, err: err?.message || String(err) },
+          'pause campaign failed',
+        );
+      }
+    }
+    log.warn(
+      {
+        event: 'all_instances_unauthorized_campaigns_paused',
+        pausedCount,
+        runningCandidates: (running || []).length,
+        greenInstancesTotal: Number(snap?.total) || 0,
+      },
+      'all instances unauthorized — paused running campaigns',
+    );
+    return;
+  }
+
+  const [manualDead] = await pool.execute(
+    `SELECT c.id, c.green_instance_id AS greenInstanceId
+     FROM campaigns c
+     INNER JOIN green_instances gi ON gi.id = c.green_instance_id
+     WHERE c.status = 'running' AND c.is_multi_instance = 0
+       AND (gi.isActive = 0 OR gi.manualDisabled = 1)`,
+  );
+  for (const row of manualDead || []) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      await updateCampaignStatus(row.id, 'paused', {
+        errorMessage: 'auto_paused: assigned instance unauthorized',
+      });
+      log.warn(
+        {
+          event: 'manual_campaign_paused_instance_unauthorized',
+          campaignId: row.id,
+          greenInstanceId: row.greenInstanceId,
+        },
+        'manual campaign paused — assigned instance inactive',
+      );
+    } catch (err) {
+      log.error(
+        { event: 'manual_pause_failed', campaignId: row.id, err: err?.message || String(err) },
+        'manual campaign pause failed',
+      );
+    }
+  }
+
   // Only recalculate multi-instance campaigns that are running or queued
   const [campaigns] = await pool.execute(
     `SELECT * FROM campaigns WHERE is_multi_instance = 1 AND status IN ('running','queued')`,

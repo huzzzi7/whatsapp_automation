@@ -54,6 +54,9 @@ const {
   updateCampaignStatus,
   deleteCampaignById,
   updateContactInstanceAssignment,
+  countPendingContacts,
+  countDeliveredContacts,
+  getPendingDeliveredCountsByCampaignIds,
 } = require('./src/repositories/campaignRepository');
 const { tryRunNext } = require('./src/services/CampaignCoordinator');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
@@ -1440,14 +1443,22 @@ app.get('/api/campaigns/active', async (req, res) => {
   try {
     logger.debug({ event: 'campaigns_active_fetch' }, 'campaigns_active_fetch');
     const runningAllRows = await getRunningCampaigns();
-    const runningAll = runningAllRows.map((c) => formatCampaign(c));
-    const paused = await getPausedCampaigns();
-    const queued = await getQueuedCampaigns();
+    const pausedRows = await getPausedCampaigns();
+    const queuedRows = await getQueuedCampaigns();
+    const allIds = [...runningAllRows, ...pausedRows, ...queuedRows].map((row) => row.id).filter(Boolean);
+    const countMap = await getPendingDeliveredCountsByCampaignIds(allIds);
+    const mergeCounts = (row) => {
+      const p = countMap.get(String(row.id)) || { pending: 0, delivered: 0 };
+      return formatCampaign({ ...row, pendingCount: p.pending, deliveredCount: p.delivered });
+    };
+    const runningAll = runningAllRows.map(mergeCounts);
+    const paused = pausedRows.map(mergeCounts);
+    const queued = queuedRows.map(mergeCounts);
     res.json({
       running: runningAll[0] ?? null,
       runningAll,
-      paused: paused.map((c) => formatCampaign(c)),
-      queued: queued.map((c) => formatCampaign(c)),
+      paused,
+      queued,
     });
   } catch (err) {
     console.error('[Campaigns active]', err);
@@ -1533,7 +1544,11 @@ app.get('/api/campaigns/:id', async (req, res) => {
     if (!c) {
       return res.status(404).json({ error: 'Campaign not found.' });
     }
-    const payload = { campaign: formatCampaign(c) };
+    const pendingCount = await countPendingContacts(req.params.id);
+    const deliveredCount = await countDeliveredContacts(req.params.id);
+    const payload = {
+      campaign: formatCampaign({ ...c, pendingCount, deliveredCount }),
+    };
     const inc = String(req.query.includeContacts || '').toLowerCase();
     if (inc === '1' || inc === 'true') {
       const rows = await getCampaignContactsSample(req.params.id, 20);

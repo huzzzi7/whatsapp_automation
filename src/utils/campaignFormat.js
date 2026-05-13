@@ -25,7 +25,13 @@ function formatCampaign(c) {
   const remaining = Math.max(0, total - sent - failed - skipped);
   const processed = sent + failed + skipped;
   const percent = total > 0 ? Number(((processed / total) * 100).toFixed(2)) : 0;
+  const st = String(c.status || '').toLowerCase();
+  const isTerminal = ['completed', 'stopped', 'failed', 'cancelled'].includes(st);
+  const cappedPercent = !isTerminal && percent >= 100 ? 99 : percent;
   const legacyFailedOrSkipped = failed + skipped;
+
+  const pendingFromDb = c.pendingCount != null && Number.isFinite(Number(c.pendingCount)) ? Number(c.pendingCount) : null;
+  const deliveredFromDb = c.deliveredCount != null && Number.isFinite(Number(c.deliveredCount)) ? Number(c.deliveredCount) : null;
 
   const cleanName = c.name && String(c.name).trim() ? String(c.name).trim() : null;
   const idStr = c.id != null ? String(c.id) : '';
@@ -45,7 +51,9 @@ function formatCampaign(c) {
     skippedCount: skipped,
     failedOrSkippedCount: legacyFailedOrSkipped,
     remaining,
-    percentComplete: percent,
+    percentComplete: cappedPercent,
+    pendingCount: pendingFromDb,
+    deliveredCount: deliveredFromDb,
     queueOrder: c.queueOrder,
     errorMessage: c.errorMessage,
     createdAt: c.createdAt,

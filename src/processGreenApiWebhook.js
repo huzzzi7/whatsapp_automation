@@ -120,19 +120,6 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
       `[Webhook] Instance status changed: instanceId=${greenApi.instanceId} status=${instanceStatus}`,
     );
     const { isAuthorizedGreenInstanceState } = require('./utils/greenInstanceAuthState');
-    if (isAuthorizedGreenInstanceState(instanceStatus)) {
-      console.log(
-        `[Webhook] Instance reconnected — auto-clearing queue for instanceId=${greenApi.instanceId}`,
-      );
-      try {
-        await clearAllQueuesForInstance(row, 'authorization_guard');
-      } catch (err) {
-        logger.error(
-          { event: 'authorization_guard_failed', greenInstanceDbId, err: err?.message || String(err) },
-          'Authorization queue guard failed',
-        );
-      }
-    }
 
     // Update DB auth status from webhook event
     try {
@@ -148,7 +135,18 @@ async function processGreenApiWebhook(rawBuffer, greenInstanceDbId) {
          WHERE id = ?`,
         [String(instanceStatus).slice(0, 50), newIsActive, greenInstanceDbId]
       );
-      if (prevIsActive !== newIsActive) {
+      const activeFlipped = Number(prevIsActive) !== Number(newIsActive);
+      if (activeFlipped && newIsActive === 0) {
+        try {
+          await clearAllQueuesForInstance(row, 'instance_unauthorized');
+        } catch (err) {
+          logger.error(
+            { event: 'instance_unauthorized_clear_failed', greenInstanceDbId, err: err?.message || String(err) },
+            'Clear queues on unauthorized failed',
+          );
+        }
+      }
+      if (activeFlipped) {
         await recalculateActiveCampaigns();
       }
     } catch (err) {

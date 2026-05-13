@@ -456,6 +456,85 @@ async function incrementSkippedCount(campaignId, count) {
   );
 }
 
+/** Global pending count for a campaign (all instances). */
+async function countPendingContacts(campaignId) {
+  const cid = String(campaignId || '').trim();
+  if (!cid) return 0;
+  const [rows] = await pool.execute(
+    `SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE campaign_id = ? AND first_send_status = 'pending'`,
+    [cid],
+  );
+  return Number(rows[0]?.cnt) || 0;
+}
+
+/** Contacts with delivery_confirmed = 1 (column may be absent on old DB — returns 0). */
+async function countDeliveredContacts(campaignId) {
+  const cid = String(campaignId || '').trim();
+  if (!cid) return 0;
+  try {
+    const [rows] = await pool.execute(
+      `SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE campaign_id = ? AND COALESCE(delivery_confirmed, 0) = 1`,
+      [cid],
+    );
+    return Number(rows[0]?.cnt) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * @param {string[]} campaignIds
+ * @returns {Promise<Map<string, { pending: number, delivered: number }>>}
+ */
+async function getPendingDeliveredCountsByCampaignIds(campaignIds) {
+  const map = new Map();
+  const list = [...new Set((campaignIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  if (!list.length) return map;
+  const ph = list.map(() => '?').join(',');
+  try {
+    const [rows] = await pool.execute(
+      `SELECT campaign_id AS campaignId,
+              SUM(first_send_status = 'pending') AS pending_cnt,
+              SUM(COALESCE(delivery_confirmed, 0) = 1) AS delivered_cnt
+       FROM campaign_contacts
+       WHERE campaign_id IN (${ph})
+       GROUP BY campaign_id`,
+      list,
+    );
+    for (const r of rows || []) {
+      const id = String(r.campaignId || '').trim();
+      if (!id) continue;
+      map.set(id, {
+        pending: Number(r.pending_cnt) || 0,
+        delivered: Number(r.delivered_cnt) || 0,
+      });
+    }
+  } catch {
+    for (const id of list) map.set(id, { pending: 0, delivered: 0 });
+  }
+  for (const id of list) {
+    if (!map.has(id)) map.set(id, { pending: 0, delivered: 0 });
+  }
+  return map;
+}
+
+/** For campaign worker auth gate: current instance row flags. */
+async function getGreenInstanceById(greenInstanceDbId) {
+  const id = String(greenInstanceDbId || '').trim();
+  if (!id) return null;
+  const [rows] = await pool.execute(
+    `SELECT id, isActive, manualDisabled FROM green_instances WHERE id = ? LIMIT 1`,
+    [id],
+  );
+  const r = rows[0];
+  if (!r) return null;
+  return {
+    id: String(r.id),
+    isActive: Number(r.isActive) === 1,
+    manualDisabled: Number(r.manualDisabled) === 1,
+  };
+}
+
 async function getPendingContacts(campaignId, limit, instanceId) {
   const lim = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 1)));
   const iid = instanceId != null && String(instanceId).trim() !== '' ? String(instanceId).trim() : null;
@@ -670,6 +749,10 @@ module.exports = {
   markContactFailed,
   markContactSkipped,
   getCampaignById,
+  countPendingContacts,
+  countDeliveredContacts,
+  getPendingDeliveredCountsByCampaignIds,
+  getGreenInstanceById,
   countCampaignContacts,
   listCampaignContactsPage,
   deleteCampaignById,
