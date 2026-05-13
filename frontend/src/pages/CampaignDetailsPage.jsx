@@ -180,6 +180,21 @@ function InfoModalRow({ label, value }) {
   );
 }
 
+function InstanceAuthBadge({ inst }) {
+  const ok = inst && inst.isActive;
+  return (
+    <span
+      className={
+        ok
+          ? 'campaign-info-modal__auth-badge campaign-info-modal__auth-badge--ok'
+          : 'campaign-info-modal__auth-badge campaign-info-modal__auth-badge--bad'
+      }
+    >
+      {ok ? 'Authorized' : 'Unauthorized'}
+    </span>
+  );
+}
+
 function CampaignInfoModal({ campaign, loading, error, onClose }) {
   return (
     <div
@@ -225,10 +240,34 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
                   label="Mode"
                   value={campaign.isMultiInstance ? 'Automatic (all instances)' : 'Manual (single instance)'}
                 />
-                <InfoModalRow label="Instance" value={instanceDisplayLabel(campaign)} />
-                {campaign.greenInstancePhone ? (
-                  <InfoModalRow label="Instance phone" value={String(campaign.greenInstancePhone)} />
-                ) : null}
+                {Array.isArray(campaign.instanceDetails) && campaign.instanceDetails.length > 0 ? (
+                  <>
+                    <InfoModalRow
+                      label="Active instances"
+                      value={String(campaign.instanceDetails.length)}
+                    />
+                    <ul className="campaign-info-modal__instance-list" aria-label="Participating instances">
+                      {campaign.instanceDetails.map((inst) => (
+                        <li key={inst.id} className="campaign-info-modal__instance-item">
+                          <span className="campaign-info-modal__instance-item-text">
+                            {inst.name || '—'}
+                            {' · '}
+                            {inst.phoneNumber || '—'}
+                            {' · '}
+                            <InstanceAuthBadge inst={inst} />
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <>
+                    <InfoModalRow label="Instance" value={instanceDisplayLabel(campaign)} />
+                    {campaign.greenInstancePhone ? (
+                      <InfoModalRow label="Instance phone" value={String(campaign.greenInstancePhone)} />
+                    ) : null}
+                  </>
+                )}
               </div>
 
               <div className="campaign-info-modal__section">

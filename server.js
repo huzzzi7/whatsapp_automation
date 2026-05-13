@@ -57,6 +57,8 @@ const {
   countPendingContacts,
   countDeliveredContacts,
   getPendingDeliveredCountsByCampaignIds,
+  getCampaignInstanceNames,
+  getCampaignInstanceNamesForCampaignIds,
 } = require('./src/repositories/campaignRepository');
 const { tryRunNext } = require('./src/services/CampaignCoordinator');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
@@ -1447,9 +1449,16 @@ app.get('/api/campaigns/active', async (req, res) => {
     const queuedRows = await getQueuedCampaigns();
     const allIds = [...runningAllRows, ...pausedRows, ...queuedRows].map((row) => row.id).filter(Boolean);
     const countMap = await getPendingDeliveredCountsByCampaignIds(allIds);
+    const instanceMap = await getCampaignInstanceNamesForCampaignIds(allIds);
     const mergeCounts = (row) => {
       const p = countMap.get(String(row.id)) || { pending: 0, delivered: 0 };
-      return formatCampaign({ ...row, pendingCount: p.pending, deliveredCount: p.delivered });
+      const instanceDetails = instanceMap.get(String(row.id)) || [];
+      return formatCampaign({
+        ...row,
+        pendingCount: p.pending,
+        deliveredCount: p.delivered,
+        instanceDetails,
+      });
     };
     const runningAll = runningAllRows.map(mergeCounts);
     const paused = pausedRows.map(mergeCounts);
@@ -1546,8 +1555,9 @@ app.get('/api/campaigns/:id', async (req, res) => {
     }
     const pendingCount = await countPendingContacts(req.params.id);
     const deliveredCount = await countDeliveredContacts(req.params.id);
+    const instanceDetails = await getCampaignInstanceNames(req.params.id);
     const payload = {
-      campaign: formatCampaign({ ...c, pendingCount, deliveredCount }),
+      campaign: formatCampaign({ ...c, pendingCount, deliveredCount, instanceDetails }),
     };
     const inc = String(req.query.includeContacts || '').toLowerCase();
     if (inc === '1' || inc === 'true') {

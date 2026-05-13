@@ -33,6 +33,8 @@ function formatCampaign(c) {
   const pendingFromDb = c.pendingCount != null && Number.isFinite(Number(c.pendingCount)) ? Number(c.pendingCount) : null;
   const deliveredFromDb = c.deliveredCount != null && Number.isFinite(Number(c.deliveredCount)) ? Number(c.deliveredCount) : null;
 
+  const instanceDetails = Array.isArray(c.instanceDetails) ? c.instanceDetails : null;
+
   const cleanName = c.name && String(c.name).trim() ? String(c.name).trim() : null;
   const idStr = c.id != null ? String(c.id) : '';
   const shortId = idStr.length >= 6 ? idStr.slice(0, 6) : idStr;
@@ -67,6 +69,7 @@ function formatCampaign(c) {
     campaignEndDate: c.campaignEndDate ?? null,
     dailyLimitPerInstance: c.dailyLimitPerInstance ?? null,
     isMultiInstance: Boolean(c.isMultiInstance),
+    instanceDetails,
   };
 }
 

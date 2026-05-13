@@ -518,6 +518,83 @@ async function getPendingDeliveredCountsByCampaignIds(campaignIds) {
   return map;
 }
 
+/** Map green_instances row to API instance detail shape. */
+function mapGreenInstanceDetailRow(row) {
+  if (!row) return null;
+  const id = row.id != null ? String(row.id) : row.instanceId != null ? String(row.instanceId) : '';
+  if (!id) return null;
+  return {
+    id,
+    name: row.name != null ? String(row.name) : '',
+    phoneNumber: row.phoneNumber != null ? String(row.phoneNumber) : null,
+    isActive: Number(row.isActive) === 1,
+    authStatus: row.authStatus != null ? String(row.authStatus) : null,
+  };
+}
+
+/**
+ * Distinct green instances that appear on campaign_contacts for this campaign (assigned sends).
+ * @param {string} campaignId
+ * @returns {Promise<Array<{ id: string, name: string, phoneNumber: string|null, isActive: boolean, authStatus: string|null }>>}
+ */
+async function getCampaignInstanceNames(campaignId) {
+  const cid = String(campaignId || '').trim();
+  if (!cid) return [];
+  const [rows] = await pool.execute(
+    `SELECT DISTINCT gi.id, gi.name, gi.phoneNumber, gi.isActive, gi.authStatus
+     FROM campaign_contacts cc
+     INNER JOIN green_instances gi ON gi.id = cc.assigned_instance_id
+     WHERE cc.campaign_id = ?
+       AND cc.assigned_instance_id IS NOT NULL`,
+    [cid],
+  );
+  const out = (rows || []).map((r) => mapGreenInstanceDetailRow(r)).filter(Boolean);
+  out.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }));
+  return out;
+}
+
+/**
+ * @param {string[]} campaignIds
+ * @returns {Promise<Map<string, Array<{ id: string, name: string, phoneNumber: string|null, isActive: boolean, authStatus: string|null }>>>}
+ */
+async function getCampaignInstanceNamesForCampaignIds(campaignIds) {
+  const map = new Map();
+  const list = [...new Set((campaignIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
+  for (const id of list) map.set(id, []);
+  if (!list.length) return map;
+  const ph = list.map(() => '?').join(',');
+  const [rows] = await pool.execute(
+    `SELECT DISTINCT cc.campaign_id AS campaignId,
+            gi.id AS instanceId,
+            gi.name,
+            gi.phoneNumber,
+            gi.isActive,
+            gi.authStatus
+     FROM campaign_contacts cc
+     INNER JOIN green_instances gi ON gi.id = cc.assigned_instance_id
+     WHERE cc.campaign_id IN (${ph})
+       AND cc.assigned_instance_id IS NOT NULL`,
+    list,
+  );
+  for (const r of rows || []) {
+    const cid = String(r.campaignId || '').trim();
+    const inst = mapGreenInstanceDetailRow({
+      id: r.instanceId,
+      name: r.name,
+      phoneNumber: r.phoneNumber,
+      isActive: r.isActive,
+      authStatus: r.authStatus,
+    });
+    if (!inst || !map.has(cid)) continue;
+    const arr = map.get(cid);
+    if (!arr.some((x) => x.id === inst.id)) arr.push(inst);
+  }
+  for (const arr of map.values()) {
+    arr.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }));
+  }
+  return map;
+}
+
 /** For campaign worker auth gate: current instance row flags. */
 async function getGreenInstanceById(greenInstanceDbId) {
   const id = String(greenInstanceDbId || '').trim();
@@ -753,6 +830,8 @@ module.exports = {
   countDeliveredContacts,
   getPendingDeliveredCountsByCampaignIds,
   getGreenInstanceById,
+  getCampaignInstanceNames,
+  getCampaignInstanceNamesForCampaignIds,
   countCampaignContacts,
   listCampaignContactsPage,
   deleteCampaignById,
