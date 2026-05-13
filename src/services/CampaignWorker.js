@@ -30,7 +30,7 @@ function sleepMs(ms) {
 }
 
 function hhmmToMinutes(hhmm, fallback) {
-  const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || '').trim());
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim().slice(0, 5));
   if (!m) return fallback;
   const h = Number(m[1]);
   const mi = Number(m[2]);
