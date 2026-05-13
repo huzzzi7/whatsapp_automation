@@ -7,11 +7,18 @@ const appConfig = require('../../config');
 
 const BATCH_INSERT_SIZE = 500;
 
+/** Campaign row + optional green_instances display fields (LEFT JOIN). */
+const CAMPAIGN_SELECT_JOIN = `SELECT c.*, gi.name AS instance_name, gi.phoneNumber AS instance_phone
+FROM campaigns c
+LEFT JOIN green_instances gi ON gi.id = c.green_instance_id`;
+
 function mapCampaignRow(row) {
   if (!row) return null;
   return {
     id: row.id,
     greenInstanceId: row.green_instance_id,
+    greenInstanceName: row.instance_name != null ? String(row.instance_name) : null,
+    greenInstancePhone: row.instance_phone != null ? String(row.instance_phone) : null,
     name: row.name,
     status: row.status,
     queueOrder: row.queue_order,
@@ -214,7 +221,7 @@ async function promoteQueuedCampaignToRunningIfDue(campaignId) {
 /** @returns {Promise<object[]>} all running campaigns, oldest started first */
 async function getRunningCampaigns() {
   const [rows] = await pool.execute(
-    `SELECT * FROM campaigns WHERE status = 'running' ORDER BY started_at ASC`,
+    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'running' ORDER BY c.started_at ASC`,
   );
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
@@ -227,7 +234,7 @@ async function getRunningCampaignByInstance(greenInstanceId) {
   const gid = String(greenInstanceId || '').trim();
   if (!gid) return null;
   const [rows] = await pool.execute(
-    `SELECT * FROM campaigns WHERE status = 'running' AND green_instance_id = ? ORDER BY started_at ASC LIMIT 1`,
+    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'running' AND c.green_instance_id = ? ORDER BY c.started_at ASC LIMIT 1`,
     [gid],
   );
   return mapCampaignRow(rows[0]);
@@ -245,9 +252,9 @@ async function getRunningCampaign() {
  */
 async function getQueuedCampaignsDueOrdered() {
   const [rows] = await pool.execute(
-    `SELECT * FROM campaigns WHERE status = 'queued'
-     AND (scheduled_at IS NULL OR scheduled_at <= UTC_TIMESTAMP())
-     ORDER BY queue_order ASC, created_at ASC`,
+    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'queued'
+     AND (c.scheduled_at IS NULL OR c.scheduled_at <= UTC_TIMESTAMP())
+     ORDER BY c.queue_order ASC, c.created_at ASC`,
   );
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
@@ -288,14 +295,14 @@ async function claimPausedAsRunningIfInstanceFree(campaignId) {
 
 async function getPausedCampaigns() {
   const [rows] = await pool.execute(
-    `SELECT * FROM campaigns WHERE status = 'paused' ORDER BY updated_at DESC`,
+    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'paused' ORDER BY c.updated_at DESC`,
   );
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
 
 async function getQueuedCampaigns() {
   const [rows] = await pool.execute(
-    `SELECT * FROM campaigns WHERE status = 'queued' ORDER BY queue_order ASC, created_at ASC`,
+    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'queued' ORDER BY c.queue_order ASC, c.created_at ASC`,
   );
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
@@ -315,12 +322,12 @@ async function listCampaigns(opts = {}) {
     }
     const ph = safe.map(() => '?').join(', ');
     const [rows] = await pool.execute(
-      `SELECT * FROM campaigns WHERE status IN (${ph}) ORDER BY created_at DESC`,
+      `${CAMPAIGN_SELECT_JOIN} WHERE c.status IN (${ph}) ORDER BY c.created_at DESC`,
       safe,
     );
     return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
   }
-  const [rows] = await pool.execute('SELECT * FROM campaigns ORDER BY created_at DESC');
+  const [rows] = await pool.execute(`${CAMPAIGN_SELECT_JOIN} ORDER BY c.created_at DESC`);
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
 
@@ -575,7 +582,7 @@ async function markContactSkipped(contactId, reason) {
 }
 
 async function getCampaignById(campaignId) {
-  const [rows] = await pool.execute('SELECT * FROM campaigns WHERE id = ? LIMIT 1', [campaignId]);
+  const [rows] = await pool.execute(`${CAMPAIGN_SELECT_JOIN} WHERE c.id = ? LIMIT 1`, [campaignId]);
   return mapCampaignRow(rows[0]);
 }
 

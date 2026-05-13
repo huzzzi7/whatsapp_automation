@@ -37,6 +37,8 @@ function formatCampaign(c) {
     displayName: cleanName || `Campaign ${shortId}`,
     status: c.status,
     greenInstanceId: c.greenInstanceId,
+    greenInstanceName: c.greenInstanceName ?? null,
+    greenInstancePhone: c.greenInstancePhone ?? null,
     totalContacts: total,
     sentCount: sent,
     failedCount: failed,
@@ -50,6 +52,13 @@ function formatCampaign(c) {
     updatedAt: c.updatedAt,
     startedAt: c.startedAt,
     completedAt: c.completedAt,
+    scheduledAt: c.scheduledAt ?? null,
+    operationalStart: c.operationalStart ?? null,
+    operationalEnd: c.operationalEnd ?? null,
+    operationalDays: c.operationalDays ?? null,
+    campaignEndDate: c.campaignEndDate ?? null,
+    dailyLimitPerInstance: c.dailyLimitPerInstance ?? null,
+    isMultiInstance: Boolean(c.isMultiInstance),
   };
 }
 

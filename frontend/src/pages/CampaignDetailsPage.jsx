@@ -4,6 +4,7 @@ import Button from '../components/ui/Button';
 import CampaignUsersModal from '../components/CampaignUsersModal';
 import {
   getActiveCampaigns,
+  getCampaignDetail,
   listCampaignsApi,
   pauseCampaign,
   resumeCampaign,
@@ -33,6 +34,66 @@ function formatScheduledUk(iso) {
     return d.toLocaleString('en-GB', { timeZone: 'Europe/London', dateStyle: 'medium', timeStyle: 'short' });
   } catch {
     return '';
+  }
+}
+
+function parseDaysSet(str) {
+  const set = new Set();
+  for (const part of String(str || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    const n = Number(part);
+    if (Number.isFinite(n) && n >= 0 && n <= 6) set.add(n);
+  }
+  return set.size ? set : new Set([1, 2, 3, 4, 5]);
+}
+
+function fmtOperationalDaysHuman(mask) {
+  const days = parseDaysSet(mask);
+  const hasMonFri = [1, 2, 3, 4, 5].every((d) => days.has(d)) && days.size === 5;
+  if (hasMonFri) return 'Mon – Fri';
+  const labels = { 0: 'Sun', 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat' };
+  return Array.from(days.values())
+    .sort((a, b) => a - b)
+    .map((d) => labels[d] || String(d))
+    .join(', ');
+}
+
+/** Formats DB time strings like "09:00:00" or "09:00" → "9:00 AM". */
+function fmtTime(t) {
+  if (t == null || String(t).trim() === '') return '—';
+  const s = String(t).trim();
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?/.exec(s);
+  if (!m) return s;
+  let h = Number(m[1]);
+  const mi = Number(m[2]);
+  if (!Number.isFinite(h) || !Number.isFinite(mi)) return s;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${String(mi).padStart(2, '0')} ${ampm}`;
+}
+
+/** Formats date or ISO datetime → "19 May 2026". */
+function fmtDate(d) {
+  if (d == null || String(d).trim() === '') return '—';
+  try {
+    const raw = String(d).trim();
+    const datePart = raw.includes('T') ? raw.split('T')[0] : raw.length >= 10 ? raw.slice(0, 10) : raw;
+    const parts = datePart.split('-');
+    if (parts.length === 3) {
+      const dt = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+      if (!Number.isNaN(dt.getTime())) {
+        return dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+      }
+    }
+    const x = new Date(raw);
+    if (!Number.isNaN(x.getTime())) {
+      return x.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    return '—';
+  } catch {
+    return '—';
   }
 }
 
@@ -80,6 +141,141 @@ function StatusBadge({ status }) {
     stopped: 'campaign-details__badge campaign-details__badge--muted',
   };
   return <span className={map[s] || 'campaign-details__badge campaign-details__badge--muted'}>{status || '—'}</span>;
+}
+
+function InfoModalRow({ label, value }) {
+  return (
+    <div className="campaign-info-modal__row">
+      <span className="campaign-info-modal__label">{label}</span>
+      <span className="campaign-info-modal__value">{value}</span>
+    </div>
+  );
+}
+
+function CampaignInfoModal({ campaign, loading, error, onClose }) {
+  return (
+    <div
+      className="modal-overlay"
+      role="presentation"
+      onClick={onClose}
+    >
+      <div
+        className="modal-content"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="campaign-info-modal-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-header">
+          <h3 id="campaign-info-modal-title" className="modal-title">
+            Campaign details
+          </h3>
+          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <div className="modal-body">
+          {loading ? <p className="muted">Loading…</p> : null}
+          {!loading && error ? <div className="alert-error" style={{ marginBottom: '1rem' }}>{error}</div> : null}
+          {!loading && !error && !campaign ? <p className="muted">No campaign data.</p> : null}
+          {!loading && !error && campaign ? (
+            <>
+              <div className="campaign-info-modal__section">
+                <div className="campaign-info-modal__section-title">Campaign info</div>
+                <InfoModalRow
+                  label="Name"
+                  value={
+                    campaign.displayName ||
+                    (campaign.name && String(campaign.name).trim() ? campaign.name : `Campaign ${String(campaign.id || '').slice(0, 6)}`)
+                  }
+                />
+                <InfoModalRow
+                  label="Status"
+                  value={<StatusBadge status={campaign.status} />}
+                />
+                <InfoModalRow label="Created" value={fmtDate(campaign.createdAt)} />
+                <InfoModalRow label="Started" value={fmtDate(campaign.startedAt)} />
+              </div>
+
+              <div className="campaign-info-modal__section">
+                <div className="campaign-info-modal__section-title">Mode &amp; instance</div>
+                <InfoModalRow
+                  label="Mode"
+                  value={campaign.isMultiInstance ? 'Automatic (all instances)' : 'Manual (single instance)'}
+                />
+                <InfoModalRow
+                  label="Instance"
+                  value={campaign.greenInstanceName || campaign.greenInstanceId || '—'}
+                />
+                {campaign.greenInstancePhone ? (
+                  <InfoModalRow label="Instance phone" value={String(campaign.greenInstancePhone)} />
+                ) : null}
+              </div>
+
+              <div className="campaign-info-modal__section">
+                <div className="campaign-info-modal__section-title">Schedule</div>
+                <InfoModalRow
+                  label="Operational hours"
+                  value={`${fmtTime(campaign.operationalStart)} – ${fmtTime(campaign.operationalEnd)}`}
+                />
+                <InfoModalRow label="Active days" value={fmtOperationalDaysHuman(campaign.operationalDays)} />
+                <InfoModalRow label="Campaign end date" value={fmtDate(campaign.campaignEndDate)} />
+                <InfoModalRow
+                  label="Scheduled start"
+                  value={campaign.scheduledAt != null && String(campaign.scheduledAt).trim() !== '' ? fmtDate(campaign.scheduledAt) : 'Immediate'}
+                />
+              </div>
+
+              <div className="campaign-info-modal__section">
+                <div className="campaign-info-modal__section-title">Progress</div>
+                <InfoModalRow label="Total contacts" value={String(campaign.totalContacts ?? 0)} />
+                <InfoModalRow label="Sent" value={String(campaign.sentCount ?? 0)} />
+                <InfoModalRow label="Failed" value={String(campaignFailedCount(campaign))} />
+                <InfoModalRow label="Skipped" value={String(campaignSkippedCount(campaign))} />
+                <InfoModalRow label="Remaining" value={String(campaign.remaining ?? 0)} />
+                <InfoModalRow
+                  label="% complete"
+                  value={`${campaign.percentComplete != null && Number.isFinite(Number(campaign.percentComplete)) ? campaign.percentComplete : campaignProgressPercent(campaign)}%`}
+                />
+                <InfoModalRow
+                  label="Daily limit per instance"
+                  value={campaign.dailyLimitPerInstance != null && campaign.dailyLimitPerInstance !== '' ? String(campaign.dailyLimitPerInstance) : '—'}
+                />
+              </div>
+
+              {campaign.errorMessage ? (
+                <div className="campaign-info-modal__section">
+                  <div className="campaign-info-modal__section-title">Error</div>
+                  <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--danger, #b91c1c)' }}>{campaign.errorMessage}</p>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="btn-secondary" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ViewDetailsButton({ campaignId, onOpen, disabled }) {
+  return (
+    <button
+      type="button"
+      className="campaign-details__icon-btn campaign-details__icon-btn--with-label"
+      title="Campaign details"
+      aria-label="Campaign details"
+      onClick={() => onOpen(campaignId)}
+      disabled={disabled}
+    >
+      <span aria-hidden>ℹ️</span>
+      <span className="campaign-details__btn-details-label">Details</span>
+    </button>
+  );
 }
 
 function CampaignTitle({ c }) {
@@ -167,9 +363,36 @@ export default function CampaignDetailsPage() {
   const [confirmStopId, setConfirmStopId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState(null);
+  const [detailsModalOpen, setDetailsModalOpen] = useState(false);
+  const [detailsCampaign, setDetailsCampaign] = useState(null);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [detailsError, setDetailsError] = useState('');
 
   const handleViewUsers = useCallback((id) => {
     setSelectedCampaignId(id);
+  }, []);
+
+  const handleCloseDetails = useCallback(() => {
+    setDetailsModalOpen(false);
+    setDetailsCampaign(null);
+    setDetailsError('');
+    setDetailsLoading(false);
+  }, []);
+
+  const handleOpenDetails = useCallback(async (id) => {
+    setDetailsModalOpen(true);
+    setDetailsLoading(true);
+    setDetailsError('');
+    setDetailsCampaign(null);
+    try {
+      const data = await getCampaignDetail(id);
+      setDetailsCampaign(data?.campaign ?? null);
+    } catch (e) {
+      setDetailsError(e?.message || 'Failed to load campaign details.');
+      setDetailsCampaign(null);
+    } finally {
+      setDetailsLoading(false);
+    }
   }, []);
 
   const loadActive = useCallback(async () => {
@@ -218,16 +441,17 @@ export default function CampaignDetailsPage() {
   }, [shouldPoll, loadActive]);
 
   useEffect(() => {
-    if (!confirmStopId && !confirmDeleteId) return undefined;
+    if (!confirmStopId && !confirmDeleteId && !detailsModalOpen) return undefined;
     const onKey = (e) => {
       if (e.key === 'Escape') {
         setConfirmStopId(null);
         setConfirmDeleteId(null);
+        if (detailsModalOpen) handleCloseDetails();
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [confirmStopId, confirmDeleteId]);
+  }, [confirmStopId, confirmDeleteId, detailsModalOpen, handleCloseDetails]);
 
   const runningList = active.runningAll || [];
   const pausedList = active.paused || [];
@@ -296,6 +520,7 @@ export default function CampaignDetailsPage() {
     try {
       await deleteCampaign(id);
       if (selectedCampaignId === id) setSelectedCampaignId(null);
+      handleCloseDetails();
       await loadActive();
       await loadHistory();
       setError('');
@@ -311,12 +536,17 @@ export default function CampaignDetailsPage() {
       <div key={c.id} className="campaign-details__active-card">
         <div className="campaign-details__card-head">
           <CampaignTitle c={c} />
-          <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+          <div className="campaign-details__card-head-actions">
+            <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
+            <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+          </div>
         </div>
         <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <StatusBadge status={c.status} />
           <span className="campaign-details__queue-meta">
-            Instance <code className="campaign-details__table-id">{c.greenInstanceId || '—'}</code>
+            {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
+            {' · '}
+            {c.greenInstanceName || c.greenInstanceId || '—'}
           </span>
         </div>
         <p className="campaign-details__stats" style={{ marginTop: '0.75rem' }}>
@@ -359,11 +589,19 @@ export default function CampaignDetailsPage() {
         <div key={c.id} className="campaign-details__active-card campaign-details__active-card--secondary">
           <div className="campaign-details__card-head">
             <CampaignTitle c={c} />
-            <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+            <div className="campaign-details__card-head-actions">
+              <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
+              <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+            </div>
           </div>
           <div style={{ marginTop: '0.5rem' }}>
             <StatusBadge status={c.status} />
             <span className="campaign-details__queue-meta"> Queue order #{c.queueOrder}</span>
+          </div>
+          <div style={{ marginTop: '0.35rem' }} className="campaign-details__queue-meta">
+            {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
+            {' · '}
+            {c.greenInstanceName || c.greenInstanceId || '—'}
           </div>
           <p className="campaign-details__stats" style={{ marginTop: '0.5rem' }}>
             Sent {c.sentCount} · Failed {campaignFailedCount(c)} · Skipped {campaignSkippedCount(c)} · Total{' '}
@@ -441,6 +679,11 @@ export default function CampaignDetailsPage() {
                               <div className="campaign-details__queue-meta">
                                 <StatusBadge status="queued" /> Order #{c.queueOrder}
                               </div>
+                              <p className="campaign-details__queue-meta" style={{ marginTop: '0.35rem', marginBottom: 0 }}>
+                                {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
+                                {' · '}
+                                {c.greenInstanceName || c.greenInstanceId || '—'}
+                              </p>
                               {c.status === 'queued' && c.scheduledAt ? (
                                 <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
                                   Scheduled for: {formatScheduledUk(c.scheduledAt)}
@@ -453,6 +696,7 @@ export default function CampaignDetailsPage() {
                               ) : null}
                             </div>
                             <div className="campaign-details__queue-actions">
+                              <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
                               <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
                               <Button
                                 type="button"
@@ -495,6 +739,7 @@ export default function CampaignDetailsPage() {
                   <tr>
                     <th>Campaign name</th>
                     <th>Status</th>
+                    <th>Instance</th>
                     <th>Total</th>
                     <th>Sent</th>
                     <th>Failed</th>
@@ -519,6 +764,10 @@ export default function CampaignDetailsPage() {
                           </div>
                         ) : null}
                       </td>
+                      <td title={c.greenInstanceId ? String(c.greenInstanceId) : undefined}>
+                        {c.greenInstanceName ||
+                          (c.greenInstanceId ? String(c.greenInstanceId).slice(0, 8) : '—')}
+                      </td>
                       <td>{c.totalContacts}</td>
                       <td>{c.sentCount}</td>
                       <td>{campaignFailedCount(c)}</td>
@@ -527,6 +776,7 @@ export default function CampaignDetailsPage() {
                       <td>{formatDt(c.completedAt)}</td>
                       <td className="campaign-details__history-actions">
                         <div className="campaign-details__history-actions-inner">
+                          <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
                           <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
                           <button
                             type="button"
@@ -562,6 +812,15 @@ export default function CampaignDetailsPage() {
           key={selectedCampaignId}
           campaignId={selectedCampaignId}
           onClose={() => setSelectedCampaignId(null)}
+        />
+      ) : null}
+
+      {detailsModalOpen ? (
+        <CampaignInfoModal
+          campaign={detailsCampaign}
+          loading={detailsLoading}
+          error={detailsError}
+          onClose={handleCloseDetails}
         />
       ) : null}
 
