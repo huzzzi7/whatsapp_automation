@@ -14,6 +14,24 @@ const delayBetweenUsersMs = parseInt(process.env.DELAY_BETWEEN_USERS_MS || '4000
 
 const defaultCountryCode = process.env.DEFAULT_COUNTRY_CODE || '44';
 
+const defaultCountryCodeFromEnv =
+  process.env.DEFAULT_COUNTRY_CODE != null && String(process.env.DEFAULT_COUNTRY_CODE).trim() !== '';
+try {
+  const { root } = require('./src/utils/logger');
+  root.info(
+    {
+      event: 'config_default_country_code',
+      defaultCountryCode,
+      source: defaultCountryCodeFromEnv ? 'env' : 'fallback',
+    },
+    defaultCountryCodeFromEnv
+      ? `Phone normalization: DEFAULT_COUNTRY_CODE=${defaultCountryCode} (from env)`
+      : `Phone normalization: DEFAULT_COUNTRY_CODE=${defaultCountryCode} (env unset; using code fallback)`,
+  );
+} catch {
+  console.info(`[config] Phone normalization: DEFAULT_COUNTRY_CODE=${defaultCountryCode}`);
+}
+
 const messageTemplates = {
   1: (user) => [
     `Heyy are you starting at ${user.university} this sept? 👀`,
