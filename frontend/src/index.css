@@ -1180,18 +1180,22 @@ select.instance-select {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+  gap: 0.75rem;
   padding: 0.2rem 0;
   font-size: 0.9rem;
 }
 
 .campaign-info-modal__label {
   color: var(--color-text-muted, #888);
+  flex-shrink: 0;
 }
 
 .campaign-info-modal__value {
   font-weight: 500;
   text-align: right;
   max-width: 60%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .campaign-details__icon-btn {
@@ -1679,6 +1683,39 @@ html[data-theme='dark'] .campaign-users-modal__badge--skipped {
   color: var(--text);
   border: 1px solid var(--border);
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+/* Campaign details modal: keep header/footer fixed, scroll long body */
+.modal-content.modal-content--campaign-info {
+  max-width: min(520px, 96vw);
+  max-height: min(calc(100vh - 2rem), 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-content.modal-content--campaign-info .modal-header {
+  flex-shrink: 0;
+  margin-bottom: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-content.modal-content--campaign-info .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 0;
+  padding: 12px 0;
+}
+
+.modal-content.modal-content--campaign-info .modal-footer {
+  flex-shrink: 0;
+  margin-top: 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 
 html[data-theme='dark'] .modal-content {

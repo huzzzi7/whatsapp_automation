@@ -74,6 +74,21 @@ function fmtTime(t) {
   return `${h12}:${String(mi).padStart(2, '0')} ${ampm}`;
 }
 
+/** User-facing campaign title — never shows raw database IDs. */
+function campaignDisplayLabel(c) {
+  const d = c?.displayName;
+  if (d != null && String(d).trim() !== '') return String(d).trim();
+  const n = c?.name;
+  if (n != null && String(n).trim() !== '') return String(n).trim();
+  return 'Unnamed campaign';
+}
+
+function instanceDisplayLabel(c) {
+  const name = c?.greenInstanceName;
+  if (name != null && String(name).trim() !== '') return String(name).trim();
+  return '—';
+}
+
 /** Formats date or ISO datetime → "19 May 2026". */
 function fmtDate(d) {
   if (d == null || String(d).trim() === '') return '—';
@@ -160,7 +175,7 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
       onClick={onClose}
     >
       <div
-        className="modal-content"
+        className="modal-content modal-content--campaign-info"
         role="dialog"
         aria-modal="true"
         aria-labelledby="campaign-info-modal-title"
@@ -182,13 +197,7 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
             <>
               <div className="campaign-info-modal__section">
                 <div className="campaign-info-modal__section-title">Campaign info</div>
-                <InfoModalRow
-                  label="Name"
-                  value={
-                    campaign.displayName ||
-                    (campaign.name && String(campaign.name).trim() ? campaign.name : `Campaign ${String(campaign.id || '').slice(0, 6)}`)
-                  }
-                />
+                <InfoModalRow label="Name" value={campaignDisplayLabel(campaign)} />
                 <InfoModalRow
                   label="Status"
                   value={<StatusBadge status={campaign.status} />}
@@ -203,10 +212,7 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
                   label="Mode"
                   value={campaign.isMultiInstance ? 'Automatic (all instances)' : 'Manual (single instance)'}
                 />
-                <InfoModalRow
-                  label="Instance"
-                  value={campaign.greenInstanceName || campaign.greenInstanceId || '—'}
-                />
+                <InfoModalRow label="Instance" value={instanceDisplayLabel(campaign)} />
                 {campaign.greenInstancePhone ? (
                   <InfoModalRow label="Instance phone" value={String(campaign.greenInstancePhone)} />
                 ) : null}
@@ -262,6 +268,28 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
   );
 }
 
+function IconNotepad() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <line x1="10" y1="9" x2="8" y2="9" />
+    </svg>
+  );
+}
+
 function ViewDetailsButton({ campaignId, onOpen, disabled }) {
   return (
     <button
@@ -272,20 +300,16 @@ function ViewDetailsButton({ campaignId, onOpen, disabled }) {
       onClick={() => onOpen(campaignId)}
       disabled={disabled}
     >
-      <span aria-hidden>ℹ️</span>
+      <IconNotepad />
       <span className="campaign-details__btn-details-label">Details</span>
     </button>
   );
 }
 
 function CampaignTitle({ c }) {
-  const label =
-    c.displayName ||
-    (c.name && String(c.name).trim() ? c.name : `Campaign ${String(c.id || '').slice(0, 6)}`);
   return (
     <div className="campaign-details__title-row">
-      <strong className="campaign-details__title">{label}</strong>
-      <code className="campaign-details__id">{c.id}</code>
+      <strong className="campaign-details__title">{campaignDisplayLabel(c)}</strong>
     </div>
   );
 }
@@ -546,7 +570,7 @@ export default function CampaignDetailsPage() {
           <span className="campaign-details__queue-meta">
             {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
             {' · '}
-            {c.greenInstanceName || c.greenInstanceId || '—'}
+            {instanceDisplayLabel(c)}
           </span>
         </div>
         <p className="campaign-details__stats" style={{ marginTop: '0.75rem' }}>
@@ -601,7 +625,7 @@ export default function CampaignDetailsPage() {
           <div style={{ marginTop: '0.35rem' }} className="campaign-details__queue-meta">
             {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
             {' · '}
-            {c.greenInstanceName || c.greenInstanceId || '—'}
+            {instanceDisplayLabel(c)}
           </div>
           <p className="campaign-details__stats" style={{ marginTop: '0.5rem' }}>
             Sent {c.sentCount} · Failed {campaignFailedCount(c)} · Skipped {campaignSkippedCount(c)} · Total{' '}
@@ -682,7 +706,7 @@ export default function CampaignDetailsPage() {
                               <p className="campaign-details__queue-meta" style={{ marginTop: '0.35rem', marginBottom: 0 }}>
                                 {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
                                 {' · '}
-                                {c.greenInstanceName || c.greenInstanceId || '—'}
+                                {instanceDisplayLabel(c)}
                               </p>
                               {c.status === 'queued' && c.scheduledAt ? (
                                 <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
@@ -753,8 +777,7 @@ export default function CampaignDetailsPage() {
                   {history.map((c) => (
                     <tr key={c.id}>
                       <td>
-                        <div className="campaign-details__history-name">{c.displayName || c.name || `Campaign ${String(c.id || '').slice(0, 6)}`}</div>
-                        <small className="campaign-details__history-id">{c.id}</small>
+                        <div className="campaign-details__history-name">{campaignDisplayLabel(c)}</div>
                       </td>
                       <td>
                         <StatusBadge status={c.status} />
@@ -764,10 +787,7 @@ export default function CampaignDetailsPage() {
                           </div>
                         ) : null}
                       </td>
-                      <td title={c.greenInstanceId ? String(c.greenInstanceId) : undefined}>
-                        {c.greenInstanceName ||
-                          (c.greenInstanceId ? String(c.greenInstanceId).slice(0, 8) : '—')}
-                      </td>
+                      <td>{instanceDisplayLabel(c)}</td>
                       <td>{c.totalContacts}</td>
                       <td>{c.sentCount}</td>
                       <td>{campaignFailedCount(c)}</td>
