@@ -323,6 +323,13 @@ async function runCampaignWorker(campaignId, opts = {}) {
 
     const giGate = await getGreenInstanceById(greenInstanceDbId);
     if (!giGate || !giGate.isActive || giGate.manualDisabled) {
+      if (current.isMultiInstance) {
+        campLog.warn(
+          { event: 'campaign_instance_unauthorized_worker_exit', greenInstanceDbId, isMultiInstance: true },
+          'multi-instance worker exiting: instance unauthorized, not pausing campaign — recalculator will reassign',
+        );
+        return;
+      }
       campLog.warn(
         { event: 'campaign_instance_unauthorized_stopping', greenInstanceDbId },
         'instance unauthorized or disabled, pausing campaign worker',
