@@ -191,6 +191,13 @@ export async function resumeCampaign(id) {
   return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/resume`, { method: 'POST', body: '{}' });
 }
 
+export async function updateCampaignSchedule(id, scheduleData) {
+  return apiFetch(`/api/campaigns/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(scheduleData),
+  });
+}
+
 export async function startQueuedCampaign(id) {
   return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/start`, { method: 'POST', body: '{}' });
 }

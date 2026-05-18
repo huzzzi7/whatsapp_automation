@@ -1345,6 +1345,118 @@ app.post('/api/campaign/start', async (req, res) => {
   }
 });
 
+// PATCH /api/campaigns/:id – update schedule on paused campaigns only
+app.patch('/api/campaigns/:id', async (req, res) => {
+  try {
+    const c = await getCampaignById(req.params.id);
+    if (!c) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found.' });
+    }
+    if (c.status !== 'paused') {
+      return res.status(400).json({
+        ok: false,
+        error: 'Schedule can only be updated while the campaign is paused.',
+      });
+    }
+
+    const body = req.body || {};
+    const {
+      operationalStart: rawOperationalStart,
+      operationalEnd: rawOperationalEnd,
+      operationalDays: rawOperationalDays,
+      campaignEndDate: rawCampaignEndDate,
+    } = body;
+
+    if (
+      rawOperationalStart == null ||
+      String(rawOperationalStart).trim() === '' ||
+      rawOperationalEnd == null ||
+      String(rawOperationalEnd).trim() === '' ||
+      rawOperationalDays == null ||
+      String(rawOperationalDays).trim() === '' ||
+      rawCampaignEndDate == null ||
+      String(rawCampaignEndDate).trim() === ''
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          'operationalStart, operationalEnd, operationalDays, and campaignEndDate are all required.',
+      });
+    }
+
+    const parseHhmm = (raw) => {
+      const m = /^(\d{1,2}):(\d{2})/.exec(String(raw).trim());
+      if (!m) return null;
+      const h = Number(m[1]);
+      if (!Number.isFinite(h) || h < 0 || h > 23) return null;
+      return `${String(h).padStart(2, '0')}:${m[2]}`;
+    };
+
+    const operationalStart = parseHhmm(rawOperationalStart);
+    const operationalEnd = parseHhmm(rawOperationalEnd);
+    const operationalDays = String(rawOperationalDays).trim().slice(0, 20);
+
+    if (!operationalStart || !operationalEnd) {
+      return res.status(400).json({
+        ok: false,
+        error: 'operationalStart and operationalEnd must be in HH:MM format.',
+      });
+    }
+    const startMins =
+      Number(operationalStart.slice(0, 2)) * 60 + Number(operationalStart.slice(3, 5));
+    const endMins = Number(operationalEnd.slice(0, 2)) * 60 + Number(operationalEnd.slice(3, 5));
+    if (!Number.isFinite(startMins) || !Number.isFinite(endMins) || endMins <= startMins) {
+      return res.status(400).json({
+        ok: false,
+        error: 'operationalEnd must be after operationalStart.',
+      });
+    }
+
+    let hasValidDay = false;
+    for (const part of operationalDays.split(',').map((s) => s.trim()).filter(Boolean)) {
+      const n = Number(part);
+      if (Number.isFinite(n) && n >= 0 && n <= 6) {
+        hasValidDay = true;
+        break;
+      }
+    }
+    if (!hasValidDay) {
+      return res.status(400).json({
+        ok: false,
+        error: 'operationalDays must include at least one valid day (0–6).',
+      });
+    }
+
+    const endDateStr = String(rawCampaignEndDate).trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(endDateStr)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'campaignEndDate must be a valid YYYY-MM-DD date.',
+      });
+    }
+    const parsedEnd = new Date(`${endDateStr}T12:00:00.000Z`);
+    if (Number.isNaN(parsedEnd.getTime())) {
+      return res.status(400).json({
+        ok: false,
+        error: 'campaignEndDate must be a valid YYYY-MM-DD date.',
+      });
+    }
+
+    await pool.execute(
+      `UPDATE campaigns
+       SET operational_start = ?, operational_end = ?, operational_days = ?, campaign_end_date = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'paused'`,
+      [operationalStart, operationalEnd, operationalDays, endDateStr, c.id],
+    );
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[Campaign PATCH schedule]', err);
+    res.status(500).json({ ok: false, error: err.message || 'Failed to update campaign schedule.' });
+  }
+});
+
 // POST /api/campaigns/:id/pause – running → paused (worker exits at batch / pauseCheck boundary)
 app.post('/api/campaigns/:id/pause', async (req, res) => {
   try {
