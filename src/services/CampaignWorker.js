@@ -22,6 +22,7 @@ const {
   getGreenInstanceById,
 } = require('../repositories/campaignRepository');
 const { createLogger } = require('../utils/logger');
+const { recalculateActiveCampaigns } = require('./campaignRecalculator');
 
 function sleepMs(ms) {
   const n = Number(ms);
@@ -327,6 +328,9 @@ async function runCampaignWorker(campaignId, opts = {}) {
         campLog.warn(
           { event: 'campaign_instance_unauthorized_worker_exit', greenInstanceDbId, isMultiInstance: true },
           'multi-instance worker exiting: instance unauthorized, not pausing campaign — recalculator will reassign',
+        );
+        recalculateActiveCampaigns().catch((err) =>
+          campLog.warn({ event: 'recalc_after_gigate_error', err: err?.message }, 'recalc fire-and-forget failed'),
         );
         return;
       }

@@ -91,10 +91,17 @@ async function tryRunNext() {
   for (const c of runningDb) {
     if (c.isMultiInstance) {
       const [rows] = await pool.execute(
-        `SELECT DISTINCT assigned_instance_id AS instanceId
-         FROM campaign_contacts
-         WHERE campaign_id = ? AND assigned_instance_id IS NOT NULL AND assigned_instance_id != ''
-         ORDER BY assigned_instance_id ASC`,
+        `SELECT DISTINCT cc.assigned_instance_id AS instanceId
+         FROM campaign_contacts cc
+         INNER JOIN green_instances gi
+           ON gi.id = cc.assigned_instance_id
+          AND gi.isActive = 1
+          AND gi.manualDisabled = 0
+         WHERE cc.campaign_id = ?
+           AND cc.first_send_status = 'pending'
+           AND cc.assigned_instance_id IS NOT NULL
+           AND cc.assigned_instance_id != ''
+         ORDER BY cc.assigned_instance_id ASC`,
         [c.id],
       );
       const ids = rows.map((r) => String(r.instanceId || '').trim()).filter(Boolean);
@@ -138,10 +145,17 @@ async function tryRunNext() {
         const promotedCampaign = await getCampaignById(first.id);
         if (promotedCampaign?.isMultiInstance) {
           const [rows] = await pool.execute(
-            `SELECT DISTINCT assigned_instance_id AS instanceId
-             FROM campaign_contacts
-             WHERE campaign_id = ? AND assigned_instance_id IS NOT NULL AND assigned_instance_id != ''
-             ORDER BY assigned_instance_id ASC`,
+            `SELECT DISTINCT cc.assigned_instance_id AS instanceId
+             FROM campaign_contacts cc
+             INNER JOIN green_instances gi
+               ON gi.id = cc.assigned_instance_id
+              AND gi.isActive = 1
+              AND gi.manualDisabled = 0
+             WHERE cc.campaign_id = ?
+               AND cc.first_send_status = 'pending'
+               AND cc.assigned_instance_id IS NOT NULL
+               AND cc.assigned_instance_id != ''
+             ORDER BY cc.assigned_instance_id ASC`,
             [first.id],
           );
           const ids = rows.map((r) => String(r.instanceId || '').trim()).filter(Boolean);
