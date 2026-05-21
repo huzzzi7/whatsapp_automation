@@ -5,7 +5,10 @@ const { updateCampaignStatus } = require('../repositories/campaignRepository');
 
 const log = createLogger('recalculator');
 
-async function recalculateActiveCampaigns() {
+let recalcInFlight = false;
+let recalcPending = false;
+
+async function _recalculateActiveCampaignsCore() {
   const [snapRows] = await pool.execute(
     `SELECT COUNT(*) AS total,
             COALESCE(SUM(CASE WHEN isActive = 1 AND manualDisabled = 0 THEN 1 ELSE 0 END), 0) AS activeCount
@@ -89,6 +92,24 @@ async function recalculateActiveCampaigns() {
         { event: 'recalc_campaign_error', campaignId: campaign.id, err: err.message },
         'recalc error',
       );
+    }
+  }
+}
+
+async function recalculateActiveCampaigns() {
+  if (recalcInFlight) {
+    recalcPending = true;
+    log.debug({ event: 'recalc_skipped_in_flight' }, 'recalc already running, will retry once after');
+    return;
+  }
+  recalcInFlight = true;
+  try {
+    await _recalculateActiveCampaignsCore();
+  } finally {
+    recalcInFlight = false;
+    if (recalcPending) {
+      recalcPending = false;
+      setImmediate(() => recalculateActiveCampaigns().catch(() => {}));
     }
   }
 }
