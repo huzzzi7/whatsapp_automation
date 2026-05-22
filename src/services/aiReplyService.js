@@ -67,7 +67,7 @@ async function generateAiReply({
 
     const model = String(process.env.OPENAI_MODEL || 'gpt-4o-mini').trim() || 'gpt-4o-mini';
     const maxTokensRaw = parseInt(String(process.env.AI_MAX_TOKENS || '200'), 10);
-    const maxTokens = Number.isFinite(maxTokensRaw) ? Math.max(50, Math.min(500, maxTokensRaw)) : 200;
+    const maxTokens = Number.isFinite(maxTokensRaw) ? Math.max(50, Math.min(800, maxTokensRaw)) : 200;
     const tempRaw = parseFloat(String(process.env.AI_TEMPERATURE || '0.7'));
     const temperature = Number.isFinite(tempRaw) ? Math.max(0, Math.min(1.5, tempRaw)) : 0.7;
     const timeoutMs = process.env.AI_TIMEOUT_MS;
