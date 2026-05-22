@@ -135,8 +135,13 @@ async function generateAiReply({
     if (!trimmed) return { replyText: null, blockSequence: false, error: null };
 
     const words = trimmed.split(/\s+/).filter(Boolean);
-    const wordCap = step >= 3 ? 20 : 15;
-    const capped = words.length > wordCap ? words.slice(0, wordCap).join(' ') : trimmed;
+    let capped = trimmed;
+    if (words.length > 40) {
+      // Trim to last complete sentence within 40 words
+      const first40 = words.slice(0, 40).join(' ');
+      const sentenceEnd = first40.search(/[.!?][^.!?]*$/);
+      capped = sentenceEnd > 0 ? first40.slice(0, sentenceEnd + 1).trim() : first40;
+    }
 
     const finalReply = capped
       .replace(/https?:\/\/\S+/gi, '')
