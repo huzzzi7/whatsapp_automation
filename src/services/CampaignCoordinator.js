@@ -12,6 +12,7 @@ const {
   updateCampaignStatus,
   getCampaignById,
   promoteQueuedCampaignToRunningIfDue,
+  claimPausedAsRunningIfInstanceFree,
 } = require('../repositories/campaignRepository');
 const { runCampaignWorker } = require('./CampaignWorker');
 const { createLogger } = require('../utils/logger');
@@ -168,6 +169,28 @@ async function tryRunNext() {
       }
     }),
   );
+
+  // Phase C: auto-resume campaigns paused by the recalculator (not user-paused)
+  try {
+    const [autoPaused] = await pool.execute(
+      `SELECT id FROM campaigns
+       WHERE status = 'paused'
+         AND error_message IN (
+           'auto_paused: all instances unauthorized',
+           'auto_paused: assigned instance unauthorized',
+           'auto_paused: instance went unauthorized during campaign'
+         )`
+    );
+    for (const c of autoPaused || []) {
+      const claimed = await claimPausedAsRunningIfInstanceFree(c.id);
+      if (claimed === 1) {
+        log.info({ event: 'coordinator_auto_resume', campaignId: c.id }, 'coordinator auto-resumed recalculator-paused campaign');
+        kickWorker(c.id, {});
+      }
+    }
+  } catch (err) {
+    log.error({ event: 'coordinator_auto_resume_error', err: err?.message || String(err) }, 'Phase C auto-resume error');
+  }
 }
 
 module.exports = { tryRunNext };

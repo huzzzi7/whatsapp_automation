@@ -2,6 +2,7 @@ const pool = require('../mysql');
 const { calculateDailyLimit } = require('./instanceLoadBalancer');
 const { createLogger } = require('../utils/logger');
 const { updateCampaignStatus } = require('../repositories/campaignRepository');
+const { claimPausedAsRunningIfInstanceFree } = require('../repositories/campaignRepository');
 
 const log = createLogger('recalculator');
 
@@ -77,6 +78,8 @@ async function _recalculateActiveCampaignsCore() {
     }
   }
 
+  await resumeAutoPausedCampaigns();
+
   // Only recalculate multi-instance campaigns that are running or queued
   const [campaigns] = await pool.execute(
     `SELECT * FROM campaigns WHERE is_multi_instance = 1 AND status IN ('running','queued')`,
@@ -111,6 +114,60 @@ async function recalculateActiveCampaigns() {
       recalcPending = false;
       setImmediate(() => recalculateActiveCampaigns().catch(() => {}));
     }
+  }
+}
+
+async function resumeAutoPausedCampaigns() {
+  try {
+    const [paused] = await pool.execute(
+      `SELECT id, green_instance_id, is_multi_instance
+       FROM campaigns
+       WHERE status = 'paused'
+         AND error_message IN (
+           'auto_paused: all instances unauthorized',
+           'auto_paused: assigned instance unauthorized',
+           'auto_paused: instance went unauthorized during campaign'
+         )`
+    );
+    if (!paused || paused.length === 0) return;
+
+    let resumedCount = 0;
+    for (const camp of paused) {
+      try {
+        // For single-instance: only resume if assigned instance is now active
+        if (!camp.is_multi_instance) {
+          const [giRows] = await pool.execute(
+            `SELECT isActive, manualDisabled FROM green_instances WHERE id = ?`,
+            [camp.green_instance_id]
+          );
+          const gi = giRows[0];
+          if (!gi || gi.isActive !== 1 || gi.manualDisabled === 1) continue;
+        }
+        const claimed = await claimPausedAsRunningIfInstanceFree(camp.id);
+        if (claimed === 1) {
+          resumedCount += 1;
+          log.info(
+            { event: 'auto_resume_success', campaignId: camp.id },
+            'auto-paused campaign resumed after instance recovery'
+          );
+        }
+      } catch (err) {
+        log.error(
+          { event: 'auto_resume_error', campaignId: camp.id, err: err?.message || String(err) },
+          'auto resume failed for campaign'
+        );
+      }
+    }
+
+    if (resumedCount > 0) {
+      const { tryRunNext } = require('../services/CampaignCoordinator');
+      tryRunNext().catch((e) =>
+        log.error({ event: 'auto_resume_tryRunNext_error', err: e?.message || String(e) }, 'tryRunNext after auto-resume failed')
+      );
+      log.info({ event: 'auto_resume_complete', resumedCount }, 'auto-resume pass done');
+    }
+  } catch (err) {
+    log.error({ event: 'auto_resume_failed', err: err?.message || String(err) }, 'resumeAutoPausedCampaigns failed');
   }
 }
 
@@ -234,5 +291,5 @@ async function updateDailyLimit(campaign, activeInstances) {
   );
 }
 
-module.exports = { recalculateActiveCampaigns };
+module.exports = { recalculateActiveCampaigns, resumeAutoPausedCampaigns };
 
