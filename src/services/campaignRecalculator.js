@@ -8,6 +8,7 @@ const log = createLogger('recalculator');
 
 let recalcInFlight = false;
 let recalcPending = false;
+let consecutiveZeroActiveCount = 0;
 
 async function _recalculateActiveCampaignsCore() {
   const [snapRows] = await pool.execute(
@@ -19,13 +20,27 @@ async function _recalculateActiveCampaignsCore() {
   const activeCount = Number(snap.activeCount) || 0;
 
   if (activeCount === 0) {
+    consecutiveZeroActiveCount += 1;
+    log.warn(
+      {
+        event: 'zero_active_instances_detected',
+        consecutiveZeroActiveCount,
+        requiredToTriggerPause: 3,
+        greenInstancesTotal: Number(snap?.total) || 0,
+      },
+      `zero active instances detected (${consecutiveZeroActiveCount}/3 before pause)`,
+    );
+    if (consecutiveZeroActiveCount < 3) {
+      return;
+    }
+    // 3 consecutive zero-active cycles — now pause
+    consecutiveZeroActiveCount = 0;
     const [running] = await pool.execute(
       `SELECT id, name, is_multi_instance FROM campaigns WHERE status = 'running'`,
     );
     let pausedCount = 0;
     for (const camp of running || []) {
       try {
-        // eslint-disable-next-line no-await-in-loop
         await updateCampaignStatus(camp.id, 'paused', {
           errorMessage: 'auto_paused: all instances unauthorized',
         });
@@ -44,10 +59,12 @@ async function _recalculateActiveCampaignsCore() {
         runningCandidates: (running || []).length,
         greenInstancesTotal: Number(snap?.total) || 0,
       },
-      'all instances unauthorized — paused running campaigns',
+      'all instances unauthorized for 3 consecutive checks — paused running campaigns',
     );
     return;
   }
+
+  consecutiveZeroActiveCount = 0;
 
   const [manualDead] = await pool.execute(
     `SELECT c.id, c.green_instance_id AS greenInstanceId
