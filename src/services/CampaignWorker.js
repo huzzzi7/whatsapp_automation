@@ -103,6 +103,61 @@ function isWithinOperationalHours(operationalStart, operationalEnd, operationalD
   return true;
 }
 
+const MAX_SPREAD_MS = 30 * 60 * 1000;
+
+function computeSpreadDelayMs({
+  operationalStart,
+  operationalEnd,
+  timeZone,
+  effectiveDailyLimit,
+  sentToday,
+  paceMs,
+  nowMs,
+}) {
+  if (effectiveDailyLimit == null || effectiveDailyLimit === 0) {
+    return paceMs;
+  }
+
+  const remainingTodayMessages = Math.max(1, effectiveDailyLimit - sentToday);
+  if (remainingTodayMessages <= 0) {
+    return paceMs;
+  }
+
+  const tz = timeZone || 'Europe/London';
+  const nowParts = tzWallParts(nowMs, tz);
+  const startMins = hhmmToMinutes(operationalStart, 9 * 60);
+  const endMins = hhmmToMinutes(operationalEnd, 21 * 60);
+  const startH = Math.floor(startMins / 60);
+  const startMi = startMins % 60;
+  const endH = Math.floor(endMins / 60);
+  const endMi = endMins % 60;
+
+  const operationalStartMs = tzWallToUtcMs(
+    { y: nowParts.y, mo: nowParts.mo, d: nowParts.d, h: startH, mi: startMi },
+    tz,
+  );
+  const operationalEndMs = tzWallToUtcMs(
+    { y: nowParts.y, mo: nowParts.mo, d: nowParts.d, h: endH, mi: endMi },
+    tz,
+  );
+
+  if (operationalStartMs == null || operationalEndMs == null) {
+    return paceMs;
+  }
+
+  const operationalWindowMs = operationalEndMs - operationalStartMs;
+  const elapsedMs = Math.max(0, nowMs - operationalStartMs);
+  const remainingWindowMs = Math.max(0, operationalWindowMs - elapsedMs);
+
+  if (remainingWindowMs <= 0) {
+    return paceMs;
+  }
+
+  const rawSpread = Math.floor(remainingWindowMs / remainingTodayMessages);
+  const spreadDelayMs = Math.min(rawSpread, MAX_SPREAD_MS);
+  return Math.max(paceMs, spreadDelayMs);
+}
+
 function msUntilNextOperationalStart(operationalStart, operationalDays, timeZone) {
   const tz = timeZone || 'Europe/London';
   const now = new Date();
@@ -328,9 +383,10 @@ async function runCampaignWorker(campaignId, opts = {}) {
         ? Math.max(1, Math.floor(Number(current.dailyLimitPerInstance)))
         : dailyLimitPerInstance;
 
+    let sentToday = 0;
     if (effectiveDailyLimit != null) {
       const today = dateStringInTz(new Date(), timeZone);
-      const sentToday = await getDailyContactsSentCount(campaignId, greenInstanceDbId, today);
+      sentToday = await getDailyContactsSentCount(campaignId, greenInstanceDbId, today);
       if (sentToday >= effectiveDailyLimit) {
         // Sleep until tomorrow's next operational start in the operational timezone.
         const msUntil = msUntilNextOperationalStart(operationalStart, operationalDays, timeZone);
@@ -367,13 +423,22 @@ async function runCampaignWorker(campaignId, opts = {}) {
       const msPerWindow = Math.max(1000, parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10));
       const maxPerWindow = Math.max(1, parseInt(process.env.RATE_LIMIT_MESSAGES_PER_WINDOW || '1', 10));
       const paceMs = Math.floor(msPerWindow / maxPerWindow);
+      const spreadDelayMs = computeSpreadDelayMs({
+        operationalStart,
+        operationalEnd,
+        timeZone,
+        effectiveDailyLimit,
+        sentToday,
+        paceMs,
+        nowMs: Date.now(),
+      });
       campLog.info(
-        { event: 'campaign_pace_delay', paceMs, msPerWindow, maxPerWindow },
-        `pacing: waiting ${paceMs}ms before next contact`,
+        { event: 'campaign_pace_delay', paceMs, spreadDelayMs, msPerWindow, maxPerWindow },
+        `pacing: even-spread delay ${spreadDelayMs}ms (pace floor ${paceMs}ms)`,
       );
-      await sleepMs(paceMs);
+      await sleepMs(spreadDelayMs);
       // eslint-disable-next-line no-await-in-loop
-      if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, paceMs, 'after_pace_sleep')) {
+      if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, spreadDelayMs, 'after_pace_sleep')) {
         return;
       }
     }
