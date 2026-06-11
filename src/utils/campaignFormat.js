@@ -66,6 +66,7 @@ function formatCampaign(c) {
     operationalStart: c.operationalStart ?? null,
     operationalEnd: c.operationalEnd ?? null,
     operationalDays: c.operationalDays ?? null,
+    campaignStartDate: c.campaignStartDate ?? null,
     campaignEndDate: c.campaignEndDate ?? null,
     dailyLimitPerInstance: c.dailyLimitPerInstance ?? null,
     isMultiInstance: Boolean(c.isMultiInstance),

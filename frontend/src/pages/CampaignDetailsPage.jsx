@@ -286,6 +286,7 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
                   value={`${fmtTime(campaign.operationalStart)} – ${fmtTime(campaign.operationalEnd)}`}
                 />
                 <InfoModalRow label="Active days" value={fmtOperationalDaysHuman(campaign.operationalDays)} />
+                <InfoModalRow label="Campaign start date" value={fmtDate(campaign.campaignStartDate)} />
                 <InfoModalRow label="Campaign end date" value={fmtDate(campaign.campaignEndDate)} />
                 <InfoModalRow
                   label="Scheduled start"
@@ -477,7 +478,8 @@ export default function CampaignDetailsPage() {
   const [expiredSchedule, setExpiredSchedule] = useState({
     operationalStart: '09:00',
     operationalEnd: '21:00',
-    operationalDays: '1,2,3,4,5,6',
+    operationalDays: '1,2,3,4,5',
+    campaignStartDate: '',
     campaignEndDate: '',
   });
   const [expiredModalStep, setExpiredModalStep] = useState(1);
@@ -601,12 +603,15 @@ export default function CampaignDetailsPage() {
     const campaign = campaigns.find((c) => c.id === id);
     if (campaign && isCampaignExpired(campaign)) {
       const today = new Date();
-      today.setDate(today.getDate() + 7);
-      const newEndDate = today.toISOString().slice(0, 10);
+      const todayStr = today.toISOString().slice(0, 10);
+      const end = new Date(today);
+      end.setDate(end.getDate() + 7);
+      const newEndDate = end.toISOString().slice(0, 10);
       setExpiredSchedule({
         operationalStart: toTimeInputValue(campaign.operationalStart) || '09:00',
         operationalEnd: toTimeInputValue(campaign.operationalEnd) || '21:00',
-        operationalDays: campaign.operationalDays || '1,2,3,4,5,6',
+        operationalDays: campaign.operationalDays || '1,2,3,4,5',
+        campaignStartDate: todayStr,
         campaignEndDate: newEndDate,
       });
       setExpiredCampaignId(id);
@@ -633,6 +638,7 @@ export default function CampaignDetailsPage() {
         operationalStart: expiredSchedule.operationalStart,
         operationalEnd: expiredSchedule.operationalEnd,
         operationalDays: expiredSchedule.operationalDays,
+        campaignStartDate: expiredSchedule.campaignStartDate,
         campaignEndDate: expiredSchedule.campaignEndDate,
       });
       await resumeCampaign(expiredCampaignId);
@@ -1122,20 +1128,42 @@ export default function CampaignDetailsPage() {
                 </p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div>
-                    <label className="ui-input-label" htmlFor="expired-campaign-end-date">
-                      Campaign End Date
-                    </label>
-                    <input
-                      id="expired-campaign-end-date"
-                      type="date"
-                      className="ui-input-field"
-                      min={todayIsoDate}
-                      value={expiredSchedule.campaignEndDate}
-                      onChange={(e) =>
-                        setExpiredSchedule((prev) => ({ ...prev, campaignEndDate: e.target.value }))
-                      }
-                    />
+                  <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                    <div style={{ flex: '1 1 140px' }}>
+                      <label className="ui-input-label" htmlFor="expired-campaign-start-date">
+                        Campaign Start Date
+                      </label>
+                      <input
+                        id="expired-campaign-start-date"
+                        type="date"
+                        className="ui-input-field"
+                        min={todayIsoDate}
+                        value={expiredSchedule.campaignStartDate}
+                        onChange={(e) => {
+                          const nextStart = e.target.value;
+                          setExpiredSchedule((prev) => {
+                            let nextEnd = prev.campaignEndDate;
+                            if (nextEnd && nextStart > nextEnd) nextEnd = nextStart;
+                            return { ...prev, campaignStartDate: nextStart, campaignEndDate: nextEnd };
+                          });
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: '1 1 140px' }}>
+                      <label className="ui-input-label" htmlFor="expired-campaign-end-date">
+                        Campaign End Date
+                      </label>
+                      <input
+                        id="expired-campaign-end-date"
+                        type="date"
+                        className="ui-input-field"
+                        min={expiredSchedule.campaignStartDate || todayIsoDate}
+                        value={expiredSchedule.campaignEndDate}
+                        onChange={(e) =>
+                          setExpiredSchedule((prev) => ({ ...prev, campaignEndDate: e.target.value }))
+                        }
+                      />
+                    </div>
                   </div>
                   <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                     <div style={{ flex: '1 1 140px' }}>
@@ -1205,7 +1233,12 @@ export default function CampaignDetailsPage() {
                   <button
                     type="button"
                     className="btn-primary"
-                    disabled={expiredSaving || !expiredSchedule.campaignEndDate}
+                    disabled={
+                      expiredSaving ||
+                      !expiredSchedule.campaignStartDate ||
+                      !expiredSchedule.campaignEndDate ||
+                      expiredSchedule.campaignEndDate < expiredSchedule.campaignStartDate
+                    }
                     onClick={() => void handleExpiredResumeSave()}
                   >
                     {expiredSaving ? 'Saving…' : 'Resume Campaign'}

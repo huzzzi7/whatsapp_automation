@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Button from '../ui/Button';
 import { MAX_MESSAGES } from '../../utils/campaignTemplates';
+import { countRemainingOperationalDays } from '../../utils/remainingOperationalDays';
+
+function todayIso() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 function todayPlusDaysIso(days) {
   const d = new Date();
@@ -28,18 +37,14 @@ function daysSetToString(set) {
   return list.join(',');
 }
 
-function daySortValue(dow) {
-  return dow === 0 ? 7 : dow;
-}
-
 const DAY_OPTIONS = [
-  { label: 'Monday', v: 1 },
-  { label: 'Tuesday', v: 2 },
-  { label: 'Wednesday', v: 3 },
-  { label: 'Thursday', v: 4 },
-  { label: 'Friday', v: 5 },
-  { label: 'Saturday', v: 6 },
-  { label: 'Sunday', v: 0 },
+  { label: 'Mon', v: 1 },
+  { label: 'Tue', v: 2 },
+  { label: 'Wed', v: 3 },
+  { label: 'Thu', v: 4 },
+  { label: 'Fri', v: 5 },
+  { label: 'Sat', v: 6 },
+  { label: 'Sun', v: 0 },
 ];
 
 /**
@@ -47,12 +52,11 @@ const DAY_OPTIONS = [
  */
 export function normalizeCampaignSettings(value) {
   const templates = Array.isArray(value.templates) ? [...value.templates] : [];
-  const operationalAnchors = String(value.operationalAnchors || '1,5');
   return {
     templates,
-    operationalAnchors,
-    operationalDays: String(value.operationalDays || '1,2,3,4,5'),
+    campaignStartDate: String(value.campaignStartDate || todayIso()),
     campaignEndDate: String(value.campaignEndDate || todayPlusDaysIso(7)),
+    operationalDays: String(value.operationalDays || '1,2,3,4,5'),
     operationalStart: String(value.operationalStart || '09:00'),
     operationalEnd: String(value.operationalEnd || '21:00'),
     instanceMode: value.instanceMode === 'manual' ? 'manual' : 'auto',
@@ -90,13 +94,20 @@ export function validateCampaignSettings(value) {
   if (startH < 8) {
     return { ok: false, error: 'Start time cannot be before 08:00.' };
   }
-  if (endH > 22) {
-    return { ok: false, error: 'End time cannot be after 22:00 (10pm).' };
+  if (endH > 23) {
+    return { ok: false, error: 'End time cannot be after 23:59.' };
   }
 
+  const startDate = String(value?.campaignStartDate || '').trim();
   const endDate = String(value?.campaignEndDate || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+    return { ok: false, error: 'Campaign start date must be a valid date.' };
+  }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
     return { ok: false, error: 'Campaign end date must be a valid date.' };
+  }
+  if (endDate < startDate) {
+    return { ok: false, error: 'End date must be on or after start date.' };
   }
 
   const days = parseDaysSet(value?.operationalDays);
@@ -144,15 +155,6 @@ function LondonTimeClock() {
   );
 }
 
-/**
- * Controlled campaign settings: message templates and schedule.
- *
- * @param {object} props
- * @param {{ templates: string[] }} props.value
- * @param {(next: { templates: string[] }) => void} props.onChange
- * @param {string} [props.error]
- * @param {import('react').RefObject<HTMLTextAreaElement | null>} [props.firstMessageFieldRef]
- */
 export default function CampaignSettingsForm({
   value,
   onChange,
@@ -168,44 +170,18 @@ export default function CampaignSettingsForm({
   const selectedInstanceId = value?.selectedInstanceId ?? '';
   const operationalStart = value?.operationalStart ?? '09:00';
   const operationalEnd = value?.operationalEnd ?? '21:00';
-  const operationalAnchors = value?.operationalAnchors ?? '1,5';
   const operationalDays = value?.operationalDays ?? '1,2,3,4,5';
+  const campaignStartDate = value?.campaignStartDate ?? todayIso();
   const campaignEndDate = value?.campaignEndDate ?? todayPlusDaysIso(7);
-
-  // Compute current day-of-week and time in campaign timezone
-  const { todayDow, todayMinutes, operationalEndMinutes } = useMemo(() => {
-    const tz = 'Europe/London';
-    const now = new Date();
-
-    // Get day of week in London (0=Sun, 1=Mon...6=Sat)
-    const dowName = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(now);
-    const dowMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-    const todayDow = dowMap[dowName] ?? 3;
-
-    // Get current HH:MM in London
-    const timeParts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz,
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).format(now);
-    const [h, m] = timeParts.split(':').map(Number);
-    const todayMinutes = (h || 0) * 60 + (m || 0);
-
-    // Parse operationalEnd (from value prop) into minutes
-    const [eh, em] = String(operationalEnd || '21:00').split(':').map(Number);
-    const operationalEndMinutes = (eh || 21) * 60 + (em || 0);
-
-    return { todayDow, todayMinutes, operationalEndMinutes };
-  }, [operationalEnd]);
+  const todayIsoMin = todayIso();
 
   const emit = useCallback(
     (next) => {
       onChange({
         templates: Array.isArray(next.templates) ? next.templates : [],
-        operationalAnchors: String(next.operationalAnchors || ''),
+        campaignStartDate: String(next.campaignStartDate || todayIso()),
+        campaignEndDate: String(next.campaignEndDate || todayPlusDaysIso(7)),
         operationalDays: String(next.operationalDays || ''),
-        campaignEndDate: String(next.campaignEndDate || ''),
         operationalStart: String(next.operationalStart || ''),
         operationalEnd: String(next.operationalEnd || ''),
         instanceMode: next.instanceMode === 'manual' ? 'manual' : 'auto',
@@ -238,38 +214,36 @@ export default function CampaignSettingsForm({
   );
 
   const daysSet = useMemo(() => parseDaysSet(operationalDays), [operationalDays]);
-  const anchorSet = useMemo(
-    () =>
-      new Set(
-        String(operationalAnchors || '')
-          .split(',')
-          .map((s) => Number(String(s).trim()))
-          .filter((n) => Number.isFinite(n) && n >= 0 && n <= 6),
-      ),
-    [operationalAnchors],
+
+  const toggleOperationalDay = useCallback(
+    (dayValue) => {
+      const next = new Set(daysSet);
+      if (next.has(dayValue)) {
+        if (next.size <= 1) return;
+        next.delete(dayValue);
+      } else {
+        next.add(dayValue);
+      }
+      emit({ ...value, operationalDays: daysSetToString(next) });
+    },
+    [daysSet, emit, value],
   );
 
-  const isDayAvailable = useCallback(
-    (dow) => {
-      // Convert both to sort values for comparison (Sun=7 in sort order)
-      const dowSort = dow === 0 ? 7 : dow;
-      const todaySort = todayDow === 0 ? 7 : todayDow;
-
-      if (dowSort < todaySort) return false; // past day this week — disabled
-      if (dowSort === todaySort) {
-        // Today: only available if current time is before operationalEnd
-        return todayMinutes < operationalEndMinutes;
-      }
-      return true; // future day — always available
+  const handleStartDateChange = useCallback(
+    (e) => {
+      const nextStart = e.target.value;
+      let nextEnd = campaignEndDate;
+      if (nextEnd && nextStart > nextEnd) nextEnd = nextStart;
+      emit({ ...value, campaignStartDate: nextStart, campaignEndDate: nextEnd });
     },
-    [todayDow, todayMinutes, operationalEndMinutes],
+    [emit, value, campaignEndDate],
   );
 
   const fieldErrors = useMemo(() => {
     if (!error) return {};
     const e = String(error);
     if (e.includes('message') || e.includes('Message')) return { templates: e };
-    if (e.includes('day') || e.includes('Day')) return { days: e };
+    if (e.includes('day') || e.includes('Day') || e.includes('date') || e.includes('Date')) return { days: e };
     if (e.includes('time slot') || e.includes('minimum required') || e.includes('Extend your')) {
       return { time: e };
     }
@@ -286,123 +260,58 @@ export default function CampaignSettingsForm({
     return { general: e };
   }, [error]);
 
-  const { estimatedCompletion, minHoursRequired } = useMemo(() => {
+  const estimatedCompletion = useMemo(() => {
     const contacts = Math.max(0, Math.floor(Number(totalContacts) || 0));
     const seqLen = Math.max(1, templates.length || 1);
     const instCount = Math.max(1, Math.floor(Number(instanceCount) || 1));
     const maxPerWindow = Math.max(1, Math.floor(Number(rateConfig.rateLimitMessagesPerWindow) || 3));
     const windowMs = Math.max(1000, Math.floor(Number(rateConfig.rateLimitWindowMs) || 60000));
 
-    if (contacts === 0) return { estimatedCompletion: null, minHoursRequired: 0 };
+    if (contacts === 0) return null;
 
-    // Total first messages only (replies depend on user responses — not predictable)
     const totalMessages = contacts * seqLen;
-
-    // Rate per minute per instance (from env config)
     const ratePerMin = maxPerWindow / (windowMs / 60000);
-
-    // Max throughput: all instances combined, per minute
     const maxThroughputPerMin = ratePerMin * instCount;
-
-    // Minimum minutes required at max rate
     const minMinutes = Math.ceil(totalMessages / maxThroughputPerMin);
     const minHours = Math.ceil(minMinutes / 60);
 
-    // Selected time slot: hours per day × number of selected days
     const [startH, startM] = String(operationalStart || '09:00').split(':').map(Number);
     const [endH, endM] = String(operationalEnd || '21:00').split(':').map(Number);
     const hoursPerDay = Math.max(
       0,
       (endH * 60 + (endM || 0) - startH * 60 - (startM || 0)) / 60,
     );
-    const selectedDays = daysSet.size || 1;
+    const remainingDays = countRemainingOperationalDays(
+      campaignStartDate,
+      campaignEndDate,
+      operationalDays,
+      Date.now(),
+      'Europe/London',
+      operationalEnd,
+    );
 
-    let label = '';
     if (minHours < 1) {
-      label = `~${minMinutes} min to complete`;
-    } else if (minHours < 24) {
-      label = `~${minHours}h minimum required`;
-    } else {
-      const days = Math.ceil(minHours / hoursPerDay || minHours / 12);
-      label = `~${days} days minimum required`;
+      return `~${minMinutes} min to complete`;
     }
-
-    return { estimatedCompletion: label, minHoursRequired: minHours };
-  }, [totalContacts, templates, instanceCount, rateConfig, operationalStart, operationalEnd, daysSet]);
-
-  const sortedAnchors = useMemo(
-    () =>
-      Array.from(anchorSet)
-        .map((d) => ({ d, s: daySortValue(d) }))
-        .sort((a, b) => a.s - b.s),
-    [anchorSet],
-  );
-
-  const startDay = sortedAnchors.length ? sortedAnchors[0].d : 1;
-  const stopDay = sortedAnchors.length ? sortedAnchors[sortedAnchors.length - 1].d : 5;
-
-  const safeStartDay = useMemo(() => {
-    if (isDayAvailable(startDay)) return startDay;
-    // Find first available day from DAY_OPTIONS order
-    const found = DAY_OPTIONS.find((d) => isDayAvailable(d.v));
-    return found ? found.v : startDay;
-  }, [startDay, isDayAvailable]);
-
-  const derivedDaysLabel = useMemo(() => {
-    const count = daysSet.size || 1;
-    const startLabel = DAY_OPTIONS.find((d) => d.v === safeStartDay)?.label || String(safeStartDay);
-    const stopLabel = DAY_OPTIONS.find((d) => d.v === stopDay)?.label || String(stopDay);
-
-    if (safeStartDay === stopDay || count === 1) {
-      return `${startLabel} only (1 day)`;
+    if (minHours < 24) {
+      return `~${minHours}h minimum required`;
     }
-    return `${startLabel} \u2192 ${stopLabel} (${count} days)`;
-  }, [daysSet.size, safeStartDay, stopDay]);
-
-  const deriveRangeDaysSet = useCallback((a, b) => {
-    const sA = daySortValue(a);
-    const sB = daySortValue(b);
-    const minS = Math.min(sA, sB);
-    const maxS = Math.max(sA, sB);
-    const finalSet = new Set();
-    for (let v = minS; v <= maxS; v += 1) {
-      finalSet.add(v === 7 ? 0 : v);
+    const days = Math.ceil(minHours / hoursPerDay || minHours / 12);
+    if (remainingDays < days) {
+      return `~${days} days minimum required (${remainingDays} operational days selected)`;
     }
-    return finalSet;
-  }, []);
-
-  const handleStartDayChange = useCallback(
-    (e) => {
-      const nextStart = Number(e.target.value);
-      if (!isDayAvailable(nextStart)) return; // ignore clicks on disabled
-      const nextStop = daySortValue(nextStart) > daySortValue(stopDay) ? nextStart : stopDay;
-      const nextAnchors = new Set([nextStart, nextStop]);
-      const finalDays = deriveRangeDaysSet(nextStart, nextStop);
-      emit({
-        ...value,
-        operationalAnchors: Array.from(nextAnchors).join(','),
-        operationalDays: daysSetToString(finalDays),
-      });
-    },
-    [emit, value, stopDay, deriveRangeDaysSet, isDayAvailable],
-  );
-
-  const handleStopDayChange = useCallback(
-    (e) => {
-      const nextStop = Number(e.target.value);
-      if (!isDayAvailable(nextStop)) return;
-      const nextStart =
-        daySortValue(nextStop) < daySortValue(safeStartDay) ? nextStop : safeStartDay;
-      const nextAnchors = new Set([nextStart, nextStop]);
-      const finalDays = deriveRangeDaysSet(nextStart, nextStop);
-      emit({
-        ...value,
-        operationalAnchors: Array.from(nextAnchors).join(','),
-        operationalDays: daysSetToString(finalDays),
-      });
-    },
-    [emit, value, safeStartDay, deriveRangeDaysSet, isDayAvailable],
-  );
+    return `~${remainingDays} operational days in range`;
+  }, [
+    totalContacts,
+    templates,
+    instanceCount,
+    rateConfig,
+    operationalStart,
+    operationalEnd,
+    campaignStartDate,
+    campaignEndDate,
+    operationalDays,
+  ]);
 
   return (
     <>
@@ -462,43 +371,52 @@ export default function CampaignSettingsForm({
       </div>
 
       <div className="campaign-message-modal__row" style={{ alignItems: 'flex-start' }}>
-        <label className="ui-input-label campaign-message-modal__label">Campaign Days</label>
+        <label className="ui-input-label campaign-message-modal__label">Campaign dates</label>
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Start day</span>
-            <select className="ui-input-field" value={safeStartDay} onChange={handleStartDayChange}>
-              {DAY_OPTIONS.map((d) => {
-                const available = isDayAvailable(d.v);
-                return (
-                  <option key={d.v} value={d.v} disabled={!available}>
-                    {d.label}
-                    {!available ? ' (unavailable)' : ''}
-                  </option>
-                );
-              })}
-            </select>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Start date</span>
+            <input
+              type="date"
+              name="campaignStartDate"
+              className="ui-input-field"
+              min={todayIsoMin}
+              value={campaignStartDate}
+              onChange={handleStartDateChange}
+            />
           </div>
-
-          <span style={{ paddingTop: 20 }}>→</span>
-
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Stop day</span>
-            <select className="ui-input-field" value={stopDay} onChange={handleStopDayChange}>
-              {DAY_OPTIONS.map((d) => {
-                const available = isDayAvailable(d.v);
-                return (
-                  <option key={d.v} value={d.v} disabled={!available}>
-                    {d.label}
-                    {!available ? ' (unavailable)' : ''}
-                  </option>
-                );
-              })}
-            </select>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>End date</span>
+            <input
+              type="date"
+              name="campaignEndDate"
+              className="ui-input-field"
+              min={campaignStartDate || todayIsoMin}
+              value={campaignEndDate}
+              onChange={(e) => emit({ ...value, campaignEndDate: e.target.value })}
+            />
           </div>
-
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', paddingTop: 20 }}>{derivedDaysLabel}</div>
         </div>
+        {fieldErrors.days ? (
+          <div style={{ color: 'var(--error, #dc2626)', fontSize: 12, marginTop: 4 }}>{fieldErrors.days}</div>
+        ) : null}
+      </div>
 
+      <div className="campaign-message-modal__row" style={{ alignItems: 'flex-start' }}>
+        <label className="ui-input-label campaign-message-modal__label">Operational days</label>
+        <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem 1rem' }}>
+            {DAY_OPTIONS.map((d) => (
+              <label key={d.v} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={daysSet.has(d.v)}
+                  onChange={() => toggleOperationalDay(d.v)}
+                />
+                <span>{d.label}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
         {fieldErrors.days ? (
           <div style={{ color: 'var(--error, #dc2626)', fontSize: 12, marginTop: 4 }}>{fieldErrors.days}</div>
         ) : null}
@@ -526,7 +444,7 @@ export default function CampaignSettingsForm({
               className="ui-input-field"
               type="time"
               min="09:00"
-              max="22:00"
+              max="23:59"
               value={operationalEnd}
               onChange={(e) => emit({ ...value, operationalEnd: e.target.value })}
             />

@@ -145,6 +145,7 @@ export async function startCampaign(users, options = {}) {
     operationalStart: options?.operationalStart,
     operationalEnd: options?.operationalEnd,
     operationalDays: options?.operationalDays,
+    campaignStartDate: options?.campaignStartDate,
     campaignEndDate: options?.campaignEndDate,
     ...(options?.scheduledAt != null && String(options.scheduledAt).trim() !== '' ? { scheduledAt: options.scheduledAt } : {}),
   };
@@ -236,6 +237,7 @@ export async function getCampaignPreview(params) {
   if (params.operationalStart) qs.set('operationalStart', params.operationalStart);
   if (params.operationalEnd) qs.set('operationalEnd', params.operationalEnd);
   if (params.operationalDays) qs.set('operationalDays', params.operationalDays);
+  if (params.campaignStartDate) qs.set('campaignStartDate', params.campaignStartDate);
   if (params.campaignEndDate) qs.set('campaignEndDate', params.campaignEndDate);
   const data = await apiFetch(`/api/campaign/preview?${qs.toString()}`);
   return data;

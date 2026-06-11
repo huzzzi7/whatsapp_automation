@@ -41,6 +41,7 @@ function mapCampaignRow(row) {
     operationalStart: row.operational_start ?? null,
     operationalEnd: row.operational_end ?? null,
     operationalDays: row.operational_days ?? null,
+    campaignStartDate: row.campaign_start_date ?? null,
     campaignEndDate: row.campaign_end_date ?? null,
     dailyLimitPerInstance: row.daily_limit_per_instance ?? null,
     isMultiInstance:
@@ -62,6 +63,7 @@ async function createCampaign({
   operationalStart = null,
   operationalEnd = null,
   operationalDays = null,
+  campaignStartDate = null,
   campaignEndDate = null,
   dailyLimitPerInstance = null,
   isMultiInstance = false,
@@ -84,6 +86,10 @@ async function createCampaign({
     operationalDays != null && String(operationalDays).trim() !== ''
       ? String(operationalDays).trim().slice(0, 20)
       : null;
+  const startDate =
+    campaignStartDate != null && String(campaignStartDate).trim() !== ''
+      ? String(campaignStartDate).trim().slice(0, 10)
+      : null;
   const endDate =
     campaignEndDate != null && String(campaignEndDate).trim() !== ''
       ? String(campaignEndDate).trim().slice(0, 10)
@@ -98,9 +104,9 @@ async function createCampaign({
     `INSERT INTO campaigns (
       id, green_instance_id, name, status, queue_order, total_contacts,
       batch_size, scheduled_at,
-      operational_start, operational_end, operational_days, campaign_end_date,
+      operational_start, operational_end, operational_days, campaign_start_date, campaign_end_date,
       daily_limit_per_instance, is_multi_instance
-    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       greenInstanceId,
@@ -112,6 +118,7 @@ async function createCampaign({
       opStart,
       opEnd,
       opDays,
+      startDate,
       endDate,
       dailyLimit,
       multi,
@@ -743,6 +750,38 @@ async function getCampaignById(campaignId) {
 }
 
 /**
+ * Update schedule fields on a paused campaign.
+ * @param {string} campaignId
+ * @param {{ operationalStart: string, operationalEnd: string, operationalDays: string, campaignStartDate: string, campaignEndDate: string, dailyLimitPerInstance?: number|null }} schedule
+ * @returns {Promise<number>} affected rows
+ */
+async function updateCampaignSchedule(campaignId, schedule) {
+  const opStart = String(schedule.operationalStart || '').trim().slice(0, 8);
+  const opEnd = String(schedule.operationalEnd || '').trim().slice(0, 8);
+  const opDays = String(schedule.operationalDays || '').trim().slice(0, 20);
+  const startDate = String(schedule.campaignStartDate || '').trim().slice(0, 10);
+  const endDate = String(schedule.campaignEndDate || '').trim().slice(0, 10);
+  const dailyLimit =
+    schedule.dailyLimitPerInstance != null && Number.isFinite(Number(schedule.dailyLimitPerInstance))
+      ? Math.max(1, Math.floor(Number(schedule.dailyLimitPerInstance)))
+      : null;
+
+  const values = [opStart, opEnd, opDays, startDate, endDate];
+  let sql = `UPDATE campaigns
+     SET operational_start = ?, operational_end = ?, operational_days = ?,
+         campaign_start_date = ?, campaign_end_date = ?`;
+  if (dailyLimit != null) {
+    sql += `, daily_limit_per_instance = ?`;
+    values.push(dailyLimit);
+  }
+  sql += `, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'paused'`;
+  values.push(campaignId);
+
+  const [result] = await pool.execute(sql, values);
+  return Number(result.affectedRows) || 0;
+}
+
+/**
  * @param {string} id - campaigns.id (UUID)
  * @returns {Promise<number>} affected rows (0 if none)
  */
@@ -826,6 +865,7 @@ module.exports = {
   markContactFailed,
   markContactSkipped,
   getCampaignById,
+  updateCampaignSchedule,
   countPendingContacts,
   countDeliveredContacts,
   getPendingDeliveredCountsByCampaignIds,

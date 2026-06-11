@@ -4,6 +4,7 @@ import { startCampaign, getCampaignStatus, logCampaign, listGreenInstances, getC
 import AuthStatusBadge from '../ui/AuthStatusBadge';
 import { applyTemplatesToUploadResult } from '../../utils/campaignTemplates';
 import { buildCampaignLogPayload } from '../../utils/campaignLog';
+import { countRemainingOperationalDays } from '../../utils/remainingOperationalDays';
 
 const POLL_MS = 1500;
 
@@ -60,6 +61,7 @@ export default function CampaignReviewStep({
   const operationalDays = String(campaignSettings?.operationalDays || '1,2,3,4,5');
   const operationalStart = String(campaignSettings?.operationalStart || '09:00');
   const operationalEnd = String(campaignSettings?.operationalEnd || '21:00');
+  const campaignStartDate = String(campaignSettings?.campaignStartDate || '');
   const campaignEndDate = String(campaignSettings?.campaignEndDate || '');
 
   useEffect(() => {
@@ -77,6 +79,7 @@ export default function CampaignReviewStep({
           operationalStart: campaignSettings?.operationalStart,
           operationalEnd: campaignSettings?.operationalEnd,
           operationalDays: campaignSettings?.operationalDays,
+          campaignStartDate: campaignSettings?.campaignStartDate,
           campaignEndDate: campaignSettings?.campaignEndDate,
         });
         if (!cancelled) setPreview(result);
@@ -100,6 +103,7 @@ export default function CampaignReviewStep({
     campaignSettings?.operationalStart,
     campaignSettings?.operationalEnd,
     campaignSettings?.operationalDays,
+    campaignSettings?.campaignStartDate,
     campaignSettings?.campaignEndDate,
   ]);
 
@@ -123,32 +127,18 @@ export default function CampaignReviewStep({
       .join(', ');
   }
 
-  function remainingOperationalDaysCount(mask, endIso) {
-    if (!endIso || !/^\d{4}-\d{2}-\d{2}$/.test(endIso)) return 1;
-    const days = parseDaysSet(mask);
-    const now = new Date();
-    const end = new Date(`${endIso}T23:59:59Z`);
-    if (Number.isNaN(end.getTime())) return 1;
-    let cnt = 0;
-    for (let i = 0; i <= 366; i += 1) {
-      const d = new Date(now.getTime());
-      d.setDate(d.getDate() + i);
-      const dayUtc = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-      if (dayUtc.getTime() > end.getTime()) break;
-      const jsDow = dayUtc.getUTCDay(); // 0..6, close enough for estimate
-      if (days.has(jsDow)) cnt += 1;
-    }
-    return Math.max(1, cnt);
+  function remainingOperationalDaysCount(mask, startIso, endIso) {
+    return countRemainingOperationalDays(startIso, endIso, mask, Date.now(), 'Europe/London', operationalEnd);
   }
 
   const estimatedDailyPerInstance = useMemo(() => {
     const total = Number(uploadResult?.totalUsers ?? uploadResult?.users?.length ?? 0) || 0;
-    const remainingDays = remainingOperationalDaysCount(operationalDays, campaignEndDate);
+    const remainingDays = remainingOperationalDaysCount(operationalDays, campaignStartDate, campaignEndDate);
     const totalDaily = Math.ceil(total / remainingDays);
     if (instanceMode === 'manual') return Math.max(1, totalDaily);
     const n = instanceCount > 0 ? instanceCount : 1;
     return Math.max(1, Math.ceil(totalDaily / n));
-  }, [uploadResult, operationalDays, campaignEndDate, instanceMode, instanceCount]);
+  }, [uploadResult, operationalDays, campaignStartDate, campaignEndDate, instanceMode, instanceCount, operationalEnd]);
 
   const isNameValid = useMemo(
     () => Boolean(campaignName != null && String(campaignName).trim().length > 0),
@@ -189,6 +179,7 @@ export default function CampaignReviewStep({
         operationalStart,
         operationalEnd,
         operationalDays,
+        campaignStartDate,
         campaignEndDate,
       });
       if (!data?.ok || !data.jobId) {
@@ -219,6 +210,7 @@ export default function CampaignReviewStep({
     operationalStart,
     operationalEnd,
     operationalDays,
+    campaignStartDate,
     campaignEndDate,
   ]);
 
@@ -420,7 +412,13 @@ export default function CampaignReviewStep({
           <strong>Universities</strong>: {uniCount}
         </p>
         <p style={{ margin: '0 0 0.5rem' }}>
-          <strong>Operational Days</strong>: {fmtOperationalDaysHuman(operationalDays)}
+          <strong>Start date</strong>: {campaignStartDate || '—'}
+        </p>
+        <p style={{ margin: '0 0 0.5rem' }}>
+          <strong>End date</strong>: {campaignEndDate || '—'}
+        </p>
+        <p style={{ margin: '0 0 0.5rem' }}>
+          <strong>Operational days</strong>: {fmtOperationalDaysHuman(operationalDays)}
         </p>
         <p style={{ margin: '0 0 0.5rem' }}>
           <strong>Daily window</strong>: {operationalStart} – {operationalEnd} (London)

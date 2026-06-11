@@ -281,6 +281,7 @@ async function updateDailyLimit(campaign, activeInstances) {
   const remaining = pendingCount[0]?.cnt || 0;
   if (remaining === 0) return;
 
+  const campaignStartDate = campaign.campaign_start_date ?? campaign.campaignStartDate ?? null;
   const campaignEndDate = campaign.campaign_end_date ?? campaign.campaignEndDate ?? null;
   const operationalDays = campaign.operational_days ?? campaign.operationalDays ?? null;
   const operationalEnd = campaign.operational_end ?? campaign.operationalEnd ?? null;
@@ -288,6 +289,7 @@ async function updateDailyLimit(campaign, activeInstances) {
   const newLimit = await calculateDailyLimit(
     remaining,
     activeInstances,
+    campaignStartDate,
     campaignEndDate,
     operationalDays,
     operationalEnd,

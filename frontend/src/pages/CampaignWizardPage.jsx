@@ -9,8 +9,17 @@ import CampaignTestForm from '../components/campaign/CampaignTestForm';
 import CampaignReviewStep from '../components/campaign/CampaignReviewStep';
 import ExcelPreviewTable from '../components/campaign/ExcelPreviewTable';
 import { DEFAULT_CAMPAIGN_TEMPLATE_STRINGS } from '../utils/campaignTemplates';
+import { countRemainingOperationalDays } from '../utils/remainingOperationalDays';
 
 const TOTAL_STEPS = 4;
+
+function todayIso() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
 
 function todayPlusDaysIso(days) {
   const d = new Date();
@@ -29,7 +38,7 @@ export default function CampaignWizardPage() {
     uploadResult: null,
     campaignSettings: {
       templates: [...DEFAULT_CAMPAIGN_TEMPLATE_STRINGS],
-      operationalAnchors: '1,5',
+      campaignStartDate: todayIso(),
       operationalDays: '1,2,3,4,5',
       campaignEndDate: todayPlusDaysIso(7),
       operationalStart: '09:00',
@@ -130,12 +139,22 @@ export default function CampaignWizardPage() {
       const endOk = /^\d{2}:\d{2}$/.test(String(cs?.operationalEnd || ''));
       const endGt = String(cs?.operationalEnd || '') > String(cs?.operationalStart || '');
       const daysOk = Boolean(String(cs?.operationalDays || '').trim());
+      const startDateOk = /^\d{4}-\d{2}-\d{2}$/.test(String(cs?.campaignStartDate || ''));
+      const endDateOk = /^\d{4}-\d{2}-\d{2}$/.test(String(cs?.campaignEndDate || ''));
+      const dateRangeOk =
+        startDateOk &&
+        endDateOk &&
+        String(cs?.campaignEndDate || '') >= String(cs?.campaignStartDate || '');
       if (!hasTemplates) {
         setStepError('Add at least one message (Message 1 cannot be empty).');
         return;
       }
       if (!daysOk) {
         setStepError('Select at least one operational day.');
+        return;
+      }
+      if (!dateRangeOk) {
+        setStepError('Campaign start and end dates must be valid, with end on or after start.');
         return;
       }
       if (!startOk || !endOk) {
@@ -163,7 +182,14 @@ export default function CampaignWizardPage() {
       const [eH, eM] = String(cs.operationalEnd || '21:00').split(':').map(Number);
       const minutesPerDay = Math.max(0, (eH * 60 + (eM || 0)) - (sH * 60 + (sM || 0)));
 
-      const selectedDays = String(cs.operationalDays || '').split(',').filter(Boolean).length || 1;
+      const selectedDays = countRemainingOperationalDays(
+        cs.campaignStartDate,
+        cs.campaignEndDate,
+        cs.operationalDays,
+        Date.now(),
+        'Europe/London',
+        cs.operationalEnd,
+      );
       const totalSelectedMinutes = minutesPerDay * selectedDays;
 
       if (minMinutes > 0 && totalSelectedMinutes < minMinutes) {

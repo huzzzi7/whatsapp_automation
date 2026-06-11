@@ -42,6 +42,7 @@ const {
   insertCampaignContacts,
   setTotalContacts,
   getCampaignById,
+  updateCampaignSchedule,
   getRunningCampaigns,
   claimQueuedAsRunningIfInstanceFree,
   claimPausedAsRunningIfInstanceFree,
@@ -1028,6 +1029,21 @@ app.get('/api/campaign/stats', async (req, res) => {
 });
 
 // GET /api/campaign/preview — read-only: instance plan + daily limits (no DB writes)
+function todayIsoInCampaignTz() {
+  const tz = process.env.CAMPAIGN_TIMEZONE || 'Europe/London';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const o = {};
+  for (const p of parts) {
+    if (p.type !== 'literal') o[p.type] = p.value;
+  }
+  return `${o.year}-${o.month}-${o.day}`;
+}
+
 app.get('/api/campaign/preview', async (req, res) => {
   try {
     const q = req.query || {};
@@ -1074,6 +1090,15 @@ app.get('/api/campaign/preview', async (req, res) => {
       campaignEndDate = toIsoDateString(d);
     }
 
+    let campaignStartDate = null;
+    if (q.campaignStartDate != null && String(q.campaignStartDate).trim() !== '') {
+      const d = new Date(String(q.campaignStartDate).trim());
+      if (!Number.isNaN(d.getTime())) campaignStartDate = toIsoDateString(d);
+    }
+    if (!campaignStartDate) {
+      campaignStartDate = todayIsoInCampaignTz();
+    }
+
     const { getAvailableInstances, calculateDailyLimit } = require('./src/services/instanceLoadBalancer');
     const { getActiveCampaignsDailyLoad } = require('./src/repositories/campaignRepository');
 
@@ -1101,6 +1126,7 @@ app.get('/api/campaign/preview', async (req, res) => {
       dailyLimitPerInstance = await calculateDailyLimit(
         totalContacts,
         instances,
+        campaignStartDate,
         new Date(campaignEndDate),
         operationalDays,
         operationalEnd,
@@ -1140,6 +1166,7 @@ app.get('/api/campaign/preview', async (req, res) => {
       totalDailyMessages:
         dailyLimitPerInstance != null ? dailyLimitPerInstance * instances.length : null,
       campaignEndDate,
+      campaignStartDate,
     });
   } catch (err) {
     console.error('[Campaign preview]', err);
@@ -1163,6 +1190,7 @@ app.post('/api/campaign/start', async (req, res) => {
     operationalStart: rawOperationalStart,
     operationalEnd: rawOperationalEnd,
     operationalDays: rawOperationalDays,
+    campaignStartDate: rawCampaignStartDate,
     campaignEndDate: rawCampaignEndDate,
   } = body;
   const campaignName = body.name && String(body.name).trim() ? String(body.name).trim() : null;
@@ -1206,6 +1234,15 @@ app.post('/api/campaign/start', async (req, res) => {
     campaignEndDate = toIsoDateString(d);
   }
 
+  let campaignStartDate = null;
+  if (rawCampaignStartDate != null && String(rawCampaignStartDate).trim() !== '') {
+    const d = new Date(String(rawCampaignStartDate).trim());
+    if (!Number.isNaN(d.getTime())) campaignStartDate = toIsoDateString(d);
+  }
+  if (!campaignStartDate) {
+    campaignStartDate = todayIsoInCampaignTz();
+  }
+
   try {
     const { getAvailableInstances, calculateDailyLimit } = require('./src/services/instanceLoadBalancer');
     const { getActiveCampaignsDailyLoad } = require('./src/repositories/campaignRepository');
@@ -1246,6 +1283,7 @@ app.post('/api/campaign/start', async (req, res) => {
       dailyLimitPerInstance = await calculateDailyLimit(
         bodyUsers.length,
         instances,
+        campaignStartDate,
         new Date(campaignEndDate),
         operationalDays,
         operationalEnd,
@@ -1263,6 +1301,7 @@ app.post('/api/campaign/start', async (req, res) => {
       operationalStart,
       operationalEnd,
       operationalDays,
+      campaignStartDate,
       campaignEndDate,
       dailyLimitPerInstance,
       isMultiInstance,
@@ -1364,6 +1403,7 @@ app.patch('/api/campaigns/:id', async (req, res) => {
       operationalStart: rawOperationalStart,
       operationalEnd: rawOperationalEnd,
       operationalDays: rawOperationalDays,
+      campaignStartDate: rawCampaignStartDate,
       campaignEndDate: rawCampaignEndDate,
     } = body;
 
@@ -1374,13 +1414,15 @@ app.patch('/api/campaigns/:id', async (req, res) => {
       String(rawOperationalEnd).trim() === '' ||
       rawOperationalDays == null ||
       String(rawOperationalDays).trim() === '' ||
+      rawCampaignStartDate == null ||
+      String(rawCampaignStartDate).trim() === '' ||
       rawCampaignEndDate == null ||
       String(rawCampaignEndDate).trim() === ''
     ) {
       return res.status(400).json({
         ok: false,
         error:
-          'operationalStart, operationalEnd, operationalDays, and campaignEndDate are all required.',
+          'operationalStart, operationalEnd, operationalDays, campaignStartDate, and campaignEndDate are all required.',
       });
     }
 
@@ -1427,30 +1469,78 @@ app.patch('/api/campaigns/:id', async (req, res) => {
       });
     }
 
+    const startDateStr = String(rawCampaignStartDate).trim().slice(0, 10);
     const endDateStr = String(rawCampaignEndDate).trim().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDateStr)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'campaignStartDate must be a valid YYYY-MM-DD date.',
+      });
+    }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(endDateStr)) {
       return res.status(400).json({
         ok: false,
         error: 'campaignEndDate must be a valid YYYY-MM-DD date.',
       });
     }
-    const parsedEnd = new Date(`${endDateStr}T12:00:00.000Z`);
-    if (Number.isNaN(parsedEnd.getTime())) {
+    if (endDateStr < startDateStr) {
       return res.status(400).json({
         ok: false,
-        error: 'campaignEndDate must be a valid YYYY-MM-DD date.',
+        error: 'campaignEndDate must be on or after campaignStartDate.',
       });
     }
 
-    await pool.execute(
-      `UPDATE campaigns
-       SET operational_start = ?, operational_end = ?, operational_days = ?, campaign_end_date = ?,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND status = 'paused'`,
-      [operationalStart, operationalEnd, operationalDays, endDateStr, c.id],
-    );
+    let dailyLimitPerInstance = null;
+    if (c.isMultiInstance) {
+      const { getAvailableInstances, calculateDailyLimit } = require('./src/services/instanceLoadBalancer');
+      const { getActiveCampaignsDailyLoad } = require('./src/repositories/campaignRepository');
+      const instances = await getAvailableInstances();
+      const remaining = await countPendingContacts(c.id);
+      if (instances.length > 0 && remaining > 0) {
+        dailyLimitPerInstance = await calculateDailyLimit(
+          remaining,
+          instances,
+          startDateStr,
+          endDateStr,
+          operationalDays,
+          operationalEnd,
+        );
 
-    res.json({ ok: true });
+        const maxRatePerMin = parseInt(process.env.RATE_LIMIT_MESSAGES_PER_WINDOW || '3', 10);
+        const windowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10);
+        const opStartMins = startMins;
+        const operationalMinutesPerDay = Math.max(1, endMins - opStartMins);
+        const physicalMaxPerInstancePerDay = Math.floor(
+          (operationalMinutesPerDay / (windowMs / 60000)) * maxRatePerMin,
+        );
+
+        let maxExistingLoad = 0;
+        for (const inst of instances) {
+          const existingLoad = await getActiveCampaignsDailyLoad(c.id, String(inst.id));
+          if (existingLoad > maxExistingLoad) maxExistingLoad = existingLoad;
+        }
+        const availableCapacity = Math.max(1, physicalMaxPerInstancePerDay - maxExistingLoad);
+        dailyLimitPerInstance = Math.min(dailyLimitPerInstance, availableCapacity);
+      }
+    }
+
+    const affected = await updateCampaignSchedule(c.id, {
+      operationalStart,
+      operationalEnd,
+      operationalDays,
+      campaignStartDate: startDateStr,
+      campaignEndDate: endDateStr,
+      dailyLimitPerInstance,
+    });
+
+    if (affected === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Schedule update failed (campaign may no longer be paused).',
+      });
+    }
+
+    res.json({ ok: true, dailyLimitPerInstance });
   } catch (err) {
     console.error('[Campaign PATCH schedule]', err);
     res.status(500).json({ ok: false, error: err.message || 'Failed to update campaign schedule.' });

@@ -137,6 +137,32 @@ function dateStringInTz(date, timeZone) {
   return `${p.y}-${mm}-${dd}`;
 }
 
+function normalizeIsoDate(value) {
+  if (value == null || String(value).trim() === '') return null;
+  const s = String(value).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  return s;
+}
+
+function msUntilCampaignStartDate(campaignStartDate, operationalStart, timeZone) {
+  const tz = timeZone || 'Europe/London';
+  const startIso = normalizeIsoDate(campaignStartDate);
+  if (!startIso) return 0;
+
+  const now = new Date();
+  const todayIso = dateStringInTz(now, tz);
+  if (todayIso >= startIso) return 0;
+
+  const [y, mo, d] = startIso.split('-').map(Number);
+  const startMins = hhmmToMinutes(operationalStart, 9 * 60);
+  const startH = Math.floor(startMins / 60);
+  const startMi = startMins % 60;
+  const utcStart = tzWallToUtcMs({ y, mo, d, h: startH, mi: startMi }, tz);
+  if (utcStart == null) return 5 * 60 * 1000;
+  const delta = utcStart - now.getTime();
+  return delta > 0 ? delta : 0;
+}
+
 async function sleepInChunks(totalMs, chunkMs = 12 * 60 * 60 * 1000) {
   let remaining = Math.max(0, Math.floor(Number(totalMs) || 0));
   const chunk = Math.max(1000, Math.floor(Number(chunkMs) || 1000));
@@ -212,6 +238,8 @@ async function runCampaignWorker(campaignId, opts = {}) {
   const operationalStart = campaign.operationalStart || process.env.CAMPAIGN_OPERATIONAL_START || '09:00';
   const operationalEnd = campaign.operationalEnd || process.env.CAMPAIGN_OPERATIONAL_END || '21:00';
   const operationalDays = campaign.operationalDays || '1,2,3,4,5';
+  const campaignStartDate = campaign.campaignStartDate ?? null;
+  const campaignEndDate = campaign.campaignEndDate ?? null;
   const dailyLimitPerInstance =
     campaign.dailyLimitPerInstance != null && Number.isFinite(Number(campaign.dailyLimitPerInstance))
       ? Math.max(1, Math.floor(Number(campaign.dailyLimitPerInstance)))
@@ -249,6 +277,34 @@ async function runCampaignWorker(campaignId, opts = {}) {
       }
       campLog.info({ event: 'campaign_worker_stopped', status: current.status }, `stopped (status: ${current.status})`);
       return;
+    }
+
+    const todayIso = dateStringInTz(new Date(), timeZone);
+    const endIso = normalizeIsoDate(current.campaignEndDate ?? campaignEndDate);
+    if (endIso && todayIso > endIso) {
+      campLog.info(
+        { event: 'campaign_end_date_passed', todayIso, endIso },
+        'campaign end date passed; marking completed',
+      );
+      await updateCampaignStatus(campaignId, 'completed');
+      return;
+    }
+
+    const startIso = normalizeIsoDate(current.campaignStartDate ?? campaignStartDate);
+    if (startIso && todayIso < startIso) {
+      const msUntilStart = msUntilCampaignStartDate(startIso, operationalStart, timeZone);
+      const sleepFor = Math.min(Math.max(msUntilStart, 1000), 5 * 60 * 1000);
+      campLog.info(
+        { event: 'campaign_before_start_date', todayIso, startIso, sleepMs: sleepFor },
+        'before campaign start date, waiting',
+      );
+      // eslint-disable-next-line no-await-in-loop
+      await sleepMs(sleepFor);
+      // eslint-disable-next-line no-await-in-loop
+      if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, sleepFor, 'before_start_date')) {
+        return;
+      }
+      continue;
     }
 
     if (!isWithinOperationalHours(operationalStart, operationalEnd, operationalDays, timeZone)) {

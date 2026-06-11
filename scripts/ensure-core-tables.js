@@ -333,6 +333,12 @@ async function ensureCampaignScheduleColumns(conn) {
     console.log('MIGRATE: campaigns — adding campaign_end_date column');
     await conn.query('ALTER TABLE campaigns ADD COLUMN campaign_end_date DATE NULL DEFAULT NULL');
   }
+  if (!(await hasColumn('campaigns', 'campaign_start_date'))) {
+    console.log('MIGRATE: campaigns — adding campaign_start_date column');
+    await conn.query(
+      'ALTER TABLE campaigns ADD COLUMN campaign_start_date DATE NULL DEFAULT NULL AFTER campaign_end_date',
+    );
+  }
   if (!(await hasColumn('campaigns', 'daily_limit_per_instance'))) {
     console.log('MIGRATE: campaigns — adding daily_limit_per_instance column');
     await conn.query('ALTER TABLE campaigns ADD COLUMN daily_limit_per_instance INT NULL DEFAULT NULL');
