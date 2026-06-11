@@ -114,12 +114,36 @@ function computeSpreadDelayMs({
   paceMs,
   nowMs,
 }) {
+  const debug = {
+    effectiveDailyLimit,
+    sentToday,
+    paceMs,
+    nowMs,
+    branch: null,
+    remainingTodayMessages: null,
+    operationalStartMs: null,
+    operationalEndMs: null,
+    operationalWindowMs: null,
+    elapsedMs: null,
+    remainingWindowMs: null,
+    rawSpread: null,
+    spreadDelayMs: null,
+    returnValue: null,
+  };
+
   if (effectiveDailyLimit == null || effectiveDailyLimit === 0) {
+    debug.branch = 'effectiveDailyLimit_null_or_zero';
+    debug.returnValue = paceMs;
+    console.log('[computeSpreadDelayMs DEBUG]', JSON.stringify(debug));
     return paceMs;
   }
 
   const remainingTodayMessages = Math.max(1, effectiveDailyLimit - sentToday);
+  debug.remainingTodayMessages = remainingTodayMessages;
   if (remainingTodayMessages <= 0) {
+    debug.branch = 'remainingTodayMessages_lte_zero';
+    debug.returnValue = paceMs;
+    console.log('[computeSpreadDelayMs DEBUG]', JSON.stringify(debug));
     return paceMs;
   }
 
@@ -140,22 +164,39 @@ function computeSpreadDelayMs({
     { y: nowParts.y, mo: nowParts.mo, d: nowParts.d, h: endH, mi: endMi },
     tz,
   );
+  debug.operationalStartMs = operationalStartMs;
+  debug.operationalEndMs = operationalEndMs;
 
   if (operationalStartMs == null || operationalEndMs == null) {
+    debug.branch = 'operationalStart_or_end_ms_null';
+    debug.returnValue = paceMs;
+    console.log('[computeSpreadDelayMs DEBUG]', JSON.stringify(debug));
     return paceMs;
   }
 
   const operationalWindowMs = operationalEndMs - operationalStartMs;
   const elapsedMs = Math.max(0, nowMs - operationalStartMs);
   const remainingWindowMs = Math.max(0, operationalWindowMs - elapsedMs);
+  debug.operationalWindowMs = operationalWindowMs;
+  debug.elapsedMs = elapsedMs;
+  debug.remainingWindowMs = remainingWindowMs;
 
   if (remainingWindowMs <= 0) {
+    debug.branch = 'remainingWindowMs_lte_zero';
+    debug.returnValue = paceMs;
+    console.log('[computeSpreadDelayMs DEBUG]', JSON.stringify(debug));
     return paceMs;
   }
 
   const rawSpread = Math.floor(remainingWindowMs / remainingTodayMessages);
   const spreadDelayMs = Math.min(rawSpread, MAX_SPREAD_MS);
-  return Math.max(paceMs, spreadDelayMs);
+  const returnValue = Math.max(paceMs, spreadDelayMs);
+  debug.rawSpread = rawSpread;
+  debug.spreadDelayMs = spreadDelayMs;
+  debug.branch = 'computed_spread';
+  debug.returnValue = returnValue;
+  console.log('[computeSpreadDelayMs DEBUG]', JSON.stringify(debug));
+  return returnValue;
 }
 
 function msUntilNextOperationalStart(operationalStart, operationalDays, timeZone) {

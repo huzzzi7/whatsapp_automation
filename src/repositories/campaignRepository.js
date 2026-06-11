@@ -12,6 +12,24 @@ const CAMPAIGN_SELECT_JOIN = `SELECT c.*, gi.name AS instance_name, gi.phoneNumb
 FROM campaigns c
 LEFT JOIN green_instances gi ON gi.id = c.green_instance_id`;
 
+function toIsoDateStr(val) {
+  if (val == null) return null;
+  // Already a YYYY-MM-DD string
+  if (typeof val === 'string') {
+    const s = val.trim().slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  }
+  // mysql2 returns DATE columns as JS Date objects
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    // Use UTC to avoid timezone shift (DATE has no time component)
+    const y = val.getUTCFullYear();
+    const m = String(val.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(val.getUTCDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return null;
+}
+
 function mapCampaignRow(row) {
   if (!row) return null;
   return {
@@ -41,8 +59,8 @@ function mapCampaignRow(row) {
     operationalStart: row.operational_start ?? null,
     operationalEnd: row.operational_end ?? null,
     operationalDays: row.operational_days ?? null,
-    campaignStartDate: row.campaign_start_date ?? null,
-    campaignEndDate: row.campaign_end_date ?? null,
+    campaignStartDate: toIsoDateStr(row.campaign_start_date),
+    campaignEndDate: toIsoDateStr(row.campaign_end_date),
     dailyLimitPerInstance: row.daily_limit_per_instance ?? null,
     isMultiInstance:
       row.is_multi_instance != null ? Boolean(Number(row.is_multi_instance)) : false,
