@@ -7,6 +7,7 @@ const mysql = require('mysql2/promise');
 const REQUIRED = [
   'users',
   'green_instances',
+  'meta_config',
   'campaigns',
   'campaign_contacts',
   'sessions',
@@ -38,9 +39,22 @@ const DDL = {
   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+  meta_config: `CREATE TABLE IF NOT EXISTS meta_config (
+  id INT NOT NULL PRIMARY KEY,
+  phoneNumberId VARCHAR(64) NOT NULL DEFAULT '',
+  accessToken TEXT NOT NULL,
+  displayName VARCHAR(255) NULL,
+  wabaId VARCHAR(64) NULL,
+  graphVersion VARCHAR(20) NULL,
+  isEnabled TINYINT(1) NOT NULL DEFAULT 1,
+  createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
   campaigns: `CREATE TABLE IF NOT EXISTS campaigns (
   id CHAR(36) NOT NULL PRIMARY KEY,
-  green_instance_id CHAR(36) NOT NULL,
+  green_instance_id CHAR(36) NULL DEFAULT NULL,
+  provider VARCHAR(20) NOT NULL DEFAULT 'green',
   name VARCHAR(255) NULL,
   status VARCHAR(20) NOT NULL,
   queue_order INT NOT NULL,
@@ -185,6 +199,7 @@ async function runCoreMigrations() {
   const order = [
     'users',
     'green_instances',
+    'meta_config',
     'campaigns',
     'campaign_contacts',
     'sessions',
@@ -224,6 +239,7 @@ async function runCoreMigrations() {
   await ensureConversationTimingColumns(conn);
   await ensureCampaignScheduleColumns(conn);
   await ensureCampaignContactsAssignmentColumn(conn);
+  await ensureMetaConfigAndCampaignProviderColumns(conn);
 
   await conn.end();
 }
@@ -364,6 +380,38 @@ async function ensureCampaignContactsAssignmentColumn(conn) {
     await conn.query(
       'ALTER TABLE campaign_contacts ADD COLUMN assigned_instance_id VARCHAR(50) NULL DEFAULT NULL',
     );
+  }
+}
+
+/** Meta singleton table + campaigns.provider / nullable green_instance_id for Meta blasts. */
+async function ensureMetaConfigAndCampaignProviderColumns(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  async function hasColumn(table, name) {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+      [schema, table, name],
+    );
+    return Number(rows[0]?.cnt) > 0;
+  }
+
+  if (!(await hasColumn('campaigns', 'provider'))) {
+    console.log('MIGRATE: campaigns — adding provider column');
+    try {
+      await conn.query("ALTER TABLE campaigns ADD COLUMN provider VARCHAR(20) NOT NULL DEFAULT 'green'");
+    } catch (err) {
+      console.warn('MIGRATE: campaigns provider column:', err.message);
+    }
+  }
+
+  // Meta campaigns use provider='meta' with green_instance_id NULL.
+  try {
+    await conn.query('ALTER TABLE campaigns MODIFY green_instance_id CHAR(36) NULL DEFAULT NULL');
+  } catch (err) {
+    console.warn('MIGRATE: campaigns green_instance_id nullable:', err.message);
   }
 }
 

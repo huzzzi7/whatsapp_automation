@@ -287,6 +287,31 @@ export async function updateInstanceActiveState(id, manualDisabled) {
   return res;
 }
 
+export async function getMetaConfig() {
+  return apiFetch('/api/meta-config', { method: 'GET' });
+}
+
+export async function updateMetaConfig(payload) {
+  return apiFetch('/api/meta-config', {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function testMetaConnection() {
+  return apiFetch('/api/meta/test-connection', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export async function sendMetaTestTemplate(payload) {
+  return apiFetch('/api/meta/test-send', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function uploadFile(formData) {
   const res = await fetch(BASE_URL + '/api/upload', {
     method: 'POST',

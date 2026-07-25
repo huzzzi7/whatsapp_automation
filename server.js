@@ -17,6 +17,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const config = require('./config');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
@@ -26,13 +27,14 @@ const { readExcelFromBuffer } = require('./src/excel');
 const { buildSequence } = require('./src/messages');
 const { sendAllUsers } = require('./src/send');
 const { sendFirstMessageOnly, onIncomingReply, sendFirstMessageOnlyWithStore } = require('./src/replyFlow');
-const { normalizePhone, toChatId } = require('./src/phone');
+const { normalizePhone, toChatId, toMetaRecipient } = require('./src/phone');
 const { controlledSend } = require('./src/services/controlledSend');
 const state = require('./src/state');
 const testState = require('./src/testState');
 const { processGreenApiWebhook, resolveGreenInstanceDbIdFromWebhookBody } = require('./src/processGreenApiWebhook');
 const { defaultTemplateStrings } = require('./src/campaignDefaults');
 const { resolveGreenApiConfig, maskApiToken } = require('./src/greenInstance');
+const metaWhatsApp = require('./src/metaWhatsApp');
 const { clearMessagesQueue } = require('./src/greenapi');
 const { clearPauseFlag, clearDepthCache } = require('./src/services/greenQueueMonitor');
 const { createJob, getJob, runCampaignJob } = require('./src/campaignJobs');
@@ -259,6 +261,46 @@ const greenApiWebhookRaw = express.raw({ type: '*/*', limit: '5mb' });
 app.post('/api/webhook/greenapi', greenApiWebhookRaw, handleGreenApiWebhookNoId);
 app.post('/api/greenapi', greenApiWebhookRaw, handleGreenApiWebhookNoId);
 app.post('/greenapi', greenApiWebhookRaw, handleGreenApiWebhookNoId);
+
+// ── Meta Cloud API webhook (stub: verify + 200 only; no inbound processing) ──
+app.get('/api/webhook/meta', (req, res) => {
+  const mode = String(req.query['hub.mode'] || '').trim();
+  const token = String(req.query['hub.verify_token'] || '').trim();
+  const challenge = req.query['hub.challenge'];
+  const expected = String(process.env.META_VERIFY_TOKEN || '').trim();
+  if (mode === 'subscribe' && expected && token === expected && challenge != null) {
+    console.log('[Meta webhook] GET verify OK');
+    return res.status(200).type('text/plain').send(String(challenge));
+  }
+  console.warn('[Meta webhook] GET verify failed', { mode, tokenMatch: Boolean(expected && token === expected) });
+  return res.sendStatus(403);
+});
+
+app.post('/api/webhook/meta', express.raw({ type: '*/*', limit: '5mb' }), (req, res) => {
+  const appSecret = String(process.env.META_APP_SECRET || '').trim();
+  if (appSecret) {
+    const signatureHeader = String(req.get('X-Hub-Signature-256') || '').trim();
+    const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
+    const expected =
+      'sha256=' + crypto.createHmac('sha256', appSecret).update(raw).digest('hex');
+    const sigBuf = Buffer.from(signatureHeader);
+    const expBuf = Buffer.from(expected);
+    if (
+      !signatureHeader ||
+      sigBuf.length !== expBuf.length ||
+      !crypto.timingSafeEqual(sigBuf, expBuf)
+    ) {
+      console.warn('[Meta webhook] POST signature mismatch');
+      return res.sendStatus(403);
+    }
+  }
+  // Intentionally no DB writes / no message processing (outbound templates only).
+  console.log(
+    '[Meta webhook] POST received (ignored)',
+    Buffer.isBuffer(req.body) ? `${req.body.length} bytes` : 'empty',
+  );
+  return res.sendStatus(200);
+});
 
 app.use(express.json({ limit: '5mb' }));
 
@@ -832,6 +874,165 @@ app.post('/api/instances/:id/clear-queue', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[ClearQueue] Unexpected error:', err.message);
     return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── Meta Cloud API config (singleton) ─────────────────────────────────
+const META_CONFIG_ID = 1;
+
+function mapMetaConfigRow(row, { maskSecrets = true } = {}) {
+  if (!row) return null;
+  const token = row.accessToken != null ? String(row.accessToken) : '';
+  return {
+    id: row.id,
+    phoneNumberId: row.phoneNumberId != null ? String(row.phoneNumberId) : '',
+    displayName: row.displayName != null ? String(row.displayName) : '',
+    wabaId: row.wabaId != null ? String(row.wabaId) : '',
+    graphVersion: row.graphVersion != null ? String(row.graphVersion) : '',
+    isEnabled: Number(row.isEnabled) === 1,
+    accessTokenMasked: maskSecrets ? maskApiToken(token) : token,
+    hasAccessToken: Boolean(token.trim()),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+async function loadMetaConfigRow() {
+  const [rows] = await pool.execute('SELECT * FROM meta_config WHERE id = ? LIMIT 1', [META_CONFIG_ID]);
+  return rows[0] || null;
+}
+
+app.get('/api/meta-config', requireAdmin, async (req, res) => {
+  try {
+    const row = await loadMetaConfigRow();
+    return res.json({
+      success: true,
+      config: row
+        ? mapMetaConfigRow(row)
+        : {
+            id: META_CONFIG_ID,
+            phoneNumberId: '',
+            displayName: '',
+            wabaId: '',
+            graphVersion: '',
+            isEnabled: true,
+            accessTokenMasked: '',
+            hasAccessToken: false,
+            createdAt: null,
+            updatedAt: null,
+          },
+      defaults: {
+        graphVersion: metaWhatsApp.getGraphVersion(),
+        webhookPath: '/api/webhook/meta',
+      },
+    });
+  } catch (err) {
+    console.error('[Meta config get]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to load Meta config' });
+  }
+});
+
+app.put('/api/meta-config', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const phoneNumberId = body.phoneNumberId != null ? String(body.phoneNumberId).trim() : '';
+    const displayName = body.displayName != null ? String(body.displayName).trim() : '';
+    const wabaId =
+      body.wabaId != null && String(body.wabaId).trim() !== '' ? String(body.wabaId).trim() : null;
+    const graphVersion =
+      body.graphVersion != null && String(body.graphVersion).trim() !== ''
+        ? String(body.graphVersion).trim()
+        : null;
+    const isEnabled = body.isEnabled === false || body.isEnabled === 0 || body.isEnabled === '0' ? 0 : 1;
+    const incomingToken = body.accessToken != null ? String(body.accessToken).trim() : '';
+
+    if (!phoneNumberId) {
+      return res.status(400).json({ success: false, error: 'phoneNumberId is required.' });
+    }
+
+    const existing = await loadMetaConfigRow();
+    let accessToken = incomingToken;
+    if (!accessToken) {
+      accessToken = existing?.accessToken != null ? String(existing.accessToken) : '';
+    }
+    if (!accessToken.trim()) {
+      return res.status(400).json({ success: false, error: 'accessToken is required.' });
+    }
+
+    await pool.execute(
+      `INSERT INTO meta_config
+        (id, phoneNumberId, accessToken, displayName, wabaId, graphVersion, isEnabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         phoneNumberId = VALUES(phoneNumberId),
+         accessToken = VALUES(accessToken),
+         displayName = VALUES(displayName),
+         wabaId = VALUES(wabaId),
+         graphVersion = VALUES(graphVersion),
+         isEnabled = VALUES(isEnabled)`,
+      [META_CONFIG_ID, phoneNumberId, accessToken, displayName || null, wabaId, graphVersion, isEnabled],
+    );
+
+    const row = await loadMetaConfigRow();
+    return res.json({ success: true, config: mapMetaConfigRow(row) });
+  } catch (err) {
+    console.error('[Meta config put]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to save Meta config' });
+  }
+});
+
+app.post('/api/meta/test-connection', requireAdmin, async (req, res) => {
+  try {
+    const row = await loadMetaConfigRow();
+    if (!row || !String(row.phoneNumberId || '').trim() || !String(row.accessToken || '').trim()) {
+      return res.status(400).json({ success: false, error: 'Save Meta config (phone number ID + token) first.' });
+    }
+    const data = await metaWhatsApp.getPhoneNumber({
+      phoneNumberId: row.phoneNumberId,
+      accessToken: row.accessToken,
+      graphVersion: row.graphVersion || undefined,
+    });
+    return res.json({ success: true, phoneNumber: data });
+  } catch (err) {
+    console.error('[Meta test-connection]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Test connection failed' });
+  }
+});
+
+app.post('/api/meta/test-send', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const toRaw = body.to != null ? String(body.to).trim() : '';
+    const templateName = body.templateName != null ? String(body.templateName).trim() : '';
+    const languageCode = body.languageCode != null ? String(body.languageCode).trim() : '';
+    const components = Array.isArray(body.components) ? body.components : undefined;
+
+    if (!toRaw || !templateName || !languageCode) {
+      return res.status(400).json({
+        success: false,
+        error: 'to, templateName, and languageCode are required.',
+      });
+    }
+
+    const row = await loadMetaConfigRow();
+    if (!row || !String(row.phoneNumberId || '').trim() || !String(row.accessToken || '').trim()) {
+      return res.status(400).json({ success: false, error: 'Save Meta config (phone number ID + token) first.' });
+    }
+
+    const to = toMetaRecipient(toRaw) || metaWhatsApp.assertMetaRecipient(toRaw);
+    const data = await metaWhatsApp.sendTemplate({
+      to,
+      phoneNumberId: row.phoneNumberId,
+      accessToken: row.accessToken,
+      templateName,
+      languageCode,
+      components,
+      graphVersion: row.graphVersion || undefined,
+    });
+    return res.json({ success: true, result: data });
+  } catch (err) {
+    console.error('[Meta test-send]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Test send failed' });
   }
 });
 
@@ -2136,6 +2337,10 @@ function startListening() {
   logger.info(
     { event: 'webhook_route_hint' },
     'Webhook (per instance): POST /api/webhook/greenapi/<green_instances.id>',
+  );
+  logger.info(
+    { event: 'meta_webhook_route_hint' },
+    'Meta webhook (stub): GET/POST /api/webhook/meta',
   );
   try {
     const prodCount = Object.keys(state.loadState()).length;

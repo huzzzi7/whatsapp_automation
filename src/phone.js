@@ -170,4 +170,13 @@ function toChatId(phone) {
   return p ? `${p}@c.us` : '';
 }
 
-module.exports = { normalizePhone, toChatId };
+/**
+ * Format normalized digits for Meta Cloud API `to` field (digits only, no +, no @c.us).
+ * @param {string} digits - Normalized phone (may include non-digits; stripped)
+ * @returns {string}
+ */
+function toMetaRecipient(digits) {
+  return String(digits || '').replace(/\D/g, '');
+}
+
+module.exports = { normalizePhone, toChatId, toMetaRecipient };
