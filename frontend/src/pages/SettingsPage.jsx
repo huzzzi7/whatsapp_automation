@@ -40,6 +40,10 @@ function webhookFullUrl(webhookPath) {
   return base ? `${base}${webhookPath}` : '';
 }
 
+// Green API instances are hidden from Settings while Meta WhatsApp is the primary provider.
+// Flip this back to true to re-show the Green instances section — all CRUD logic below is untouched.
+const SHOW_GREEN_INSTANCES = false;
+
 const EMPTY_META_FORM = {
   displayName: '',
   phoneNumberId: '',
@@ -239,131 +243,17 @@ export default function SettingsPage() {
     <div className="settings-page">
       <div className="settings-page__header">
         <h1>Settings</h1>
-        <Button type="button" className="ui-button--inline" onClick={openCreate}>
-          Add new instance
-        </Button>
+        {SHOW_GREEN_INSTANCES ? (
+          <Button type="button" className="ui-button--inline" onClick={openCreate}>
+            Add new instance
+          </Button>
+        ) : null}
       </div>
       <p style={{ color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-        
+
       </p>
 
-      {error ? <div className="alert-error" style={{ marginBottom: '1rem' }}>{error}</div> : null}
-
-      {loading ? (
-        <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
-      ) : instances.length === 0 ? (
-        <Card>
-          <p style={{ margin: 0, color: 'var(--text-muted)' }}>
-            No instances yet. Click <strong>Add new instance</strong> to add your Green API credentials.
-          </p>
-        </Card>
-      ) : (
-        <div className="settings-instances-grid">
-          {instances.map((inst) => (
-            <Card key={inst.id} className="settings-instance-card">
-              <div className="settings-instance-card__header">
-                <h2 className="settings-instance-card__title">{inst.name}</h2>
-                <div className="settings-instance-card__actions">
-                  <button
-                    type="button"
-                    className="settings-instance-card__icon-btn"
-                    onClick={() => openEdit(inst.id)}
-                    aria-label={`Edit ${inst.name}`}
-                    title="Edit"
-                  >
-                    <IconEdit />
-                  </button>
-                  <button
-                    type="button"
-                    className="settings-instance-card__icon-btn settings-instance-card__icon-btn--danger"
-                    onClick={() => handleDelete(inst.id, inst.name)}
-                    aria-label={`Delete ${inst.name}`}
-                    title="Delete"
-                  >
-                    <IconTrash />
-                  </button>
-                </div>
-              </div>
-              <p className="settings-instance-card__meta">
-                <span className="settings-instance-card__label">Phone</span> {inst.phoneNumber || '—'}
-              </p>
-              <p className="settings-instance-card__meta">
-                <span className="settings-instance-card__label">Green instance ID</span>{' '}
-                <code className="settings-instance-card__code">{inst.greenInstanceId}</code>
-              </p>
-              <p className="settings-instance-card__meta">
-                <span className="settings-instance-card__label">Token</span> {inst.apiTokenMasked}
-              </p>
-              <p className="settings-instance-card__meta">
-                <span className="settings-instance-card__label">Status</span>{' '}
-                <AuthStatusBadge authStatus={inst.authStatus} />
-                {inst.statusCheckedAt && (
-                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: 8 }}>
-                    checked {new Date(inst.statusCheckedAt).toLocaleTimeString()}
-                  </span>
-                )}
-              </p>
-              <p className="settings-instance-card__meta">
-                <span className="settings-instance-card__label">Use in campaigns</span>{' '}
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={!inst.manualDisabled}
-                    onChange={() => handleToggleActive(inst)}
-                  />
-                  <span style={{ fontSize: '0.85rem', color: inst.manualDisabled ? 'var(--text-muted)' : 'inherit' }}>
-                    {inst.manualDisabled ? 'Disabled' : 'Enabled'}
-                  </span>
-                </label>
-              </p>
-              <p className="settings-instance-card__webhook">
-                <span className="settings-instance-card__label">Webhook path</span>
-                <code className="settings-instance-card__code">
-                  POST {inst.webhookPath || `/api/webhook/greenapi/${inst.id}`}
-                </code>
-              </p>
-              <div className="settings-instance-card__webhook-actions">
-                <Button
-                  type="button"
-                  className="ui-button--inline ui-button--secondary"
-                  onClick={async () => {
-                    const path = inst.webhookPath || `/api/webhook/greenapi/${inst.id}`;
-                    const full = webhookFullUrl(path);
-                    const text = full || `https://<PUBLIC_HOST>${path}`;
-                    try {
-                      await navigator.clipboard.writeText(full || path);
-                      setCopiedId(inst.id);
-                      setTimeout(() => setCopiedId(null), 2000);
-                    } catch {
-                      window.prompt('Copy webhook URL (set VITE_PUBLIC_WEBHOOK_BASE_URL for full URL):', text);
-                    }
-                  }}
-                >
-                  {copiedId === inst.id ? 'Copied' : 'Copy webhook URL'}
-                </Button>
-                <Button
-                  type="button"
-                  className="ui-button--inline ui-button--secondary"
-                  onClick={() => handleRefreshStatus(inst.id)}
-                >
-                  Refresh Status
-                </Button>
-                {!webhookFullUrl(inst.webhookPath || `/api/webhook/greenapi/${inst.id}`) ? (
-                  <span className="settings-instance-card__webhook-note">
-
-                  </span>
-                ) : (
-                  <code className="settings-instance-card__code settings-instance-card__code--block">
-                    {webhookFullUrl(inst.webhookPath || `/api/webhook/greenapi/${inst.id}`)}
-                  </code>
-                )}
-              </div>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      <Card style={{ marginTop: '1.5rem' }}>
+      <Card>
         <h2 style={{ marginTop: 0, marginBottom: '0.35rem' }}>Meta WhatsApp</h2>
         <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
           Outbound templates only — inbound replies are not processed
@@ -542,6 +432,127 @@ export default function SettingsPage() {
           </div>
         ) : null}
       </Card>
+
+      {SHOW_GREEN_INSTANCES ? (
+        <>
+      <div style={{ marginTop: '1.5rem' }} />
+      {error ? <div className="alert-error" style={{ marginBottom: '1rem' }}>{error}</div> : null}
+
+      {loading ? (
+        <p style={{ color: 'var(--text-muted)' }}>Loading…</p>
+      ) : instances.length === 0 ? (
+        <Card>
+          <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+            No instances yet. Click <strong>Add new instance</strong> to add your Green API credentials.
+          </p>
+        </Card>
+      ) : (
+        <div className="settings-instances-grid">
+          {instances.map((inst) => (
+            <Card key={inst.id} className="settings-instance-card">
+              <div className="settings-instance-card__header">
+                <h2 className="settings-instance-card__title">{inst.name}</h2>
+                <div className="settings-instance-card__actions">
+                  <button
+                    type="button"
+                    className="settings-instance-card__icon-btn"
+                    onClick={() => openEdit(inst.id)}
+                    aria-label={`Edit ${inst.name}`}
+                    title="Edit"
+                  >
+                    <IconEdit />
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-instance-card__icon-btn settings-instance-card__icon-btn--danger"
+                    onClick={() => handleDelete(inst.id, inst.name)}
+                    aria-label={`Delete ${inst.name}`}
+                    title="Delete"
+                  >
+                    <IconTrash />
+                  </button>
+                </div>
+              </div>
+              <p className="settings-instance-card__meta">
+                <span className="settings-instance-card__label">Phone</span> {inst.phoneNumber || '—'}
+              </p>
+              <p className="settings-instance-card__meta">
+                <span className="settings-instance-card__label">Green instance ID</span>{' '}
+                <code className="settings-instance-card__code">{inst.greenInstanceId}</code>
+              </p>
+              <p className="settings-instance-card__meta">
+                <span className="settings-instance-card__label">Token</span> {inst.apiTokenMasked}
+              </p>
+              <p className="settings-instance-card__meta">
+                <span className="settings-instance-card__label">Status</span>{' '}
+                <AuthStatusBadge authStatus={inst.authStatus} />
+                {inst.statusCheckedAt && (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: 8 }}>
+                    checked {new Date(inst.statusCheckedAt).toLocaleTimeString()}
+                  </span>
+                )}
+              </p>
+              <p className="settings-instance-card__meta">
+                <span className="settings-instance-card__label">Use in campaigns</span>{' '}
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={!inst.manualDisabled}
+                    onChange={() => handleToggleActive(inst)}
+                  />
+                  <span style={{ fontSize: '0.85rem', color: inst.manualDisabled ? 'var(--text-muted)' : 'inherit' }}>
+                    {inst.manualDisabled ? 'Disabled' : 'Enabled'}
+                  </span>
+                </label>
+              </p>
+              <p className="settings-instance-card__webhook">
+                <span className="settings-instance-card__label">Webhook path</span>
+                <code className="settings-instance-card__code">
+                  POST {inst.webhookPath || `/api/webhook/greenapi/${inst.id}`}
+                </code>
+              </p>
+              <div className="settings-instance-card__webhook-actions">
+                <Button
+                  type="button"
+                  className="ui-button--inline ui-button--secondary"
+                  onClick={async () => {
+                    const path = inst.webhookPath || `/api/webhook/greenapi/${inst.id}`;
+                    const full = webhookFullUrl(path);
+                    const text = full || `https://<PUBLIC_HOST>${path}`;
+                    try {
+                      await navigator.clipboard.writeText(full || path);
+                      setCopiedId(inst.id);
+                      setTimeout(() => setCopiedId(null), 2000);
+                    } catch {
+                      window.prompt('Copy webhook URL (set VITE_PUBLIC_WEBHOOK_BASE_URL for full URL):', text);
+                    }
+                  }}
+                >
+                  {copiedId === inst.id ? 'Copied' : 'Copy webhook URL'}
+                </Button>
+                <Button
+                  type="button"
+                  className="ui-button--inline ui-button--secondary"
+                  onClick={() => handleRefreshStatus(inst.id)}
+                >
+                  Refresh Status
+                </Button>
+                {!webhookFullUrl(inst.webhookPath || `/api/webhook/greenapi/${inst.id}`) ? (
+                  <span className="settings-instance-card__webhook-note">
+
+                  </span>
+                ) : (
+                  <code className="settings-instance-card__code settings-instance-card__code--block">
+                    {webhookFullUrl(inst.webhookPath || `/api/webhook/greenapi/${inst.id}`)}
+                  </code>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+        </>
+      ) : null}
 
       <GreenInstanceModal
         open={modalOpen}
