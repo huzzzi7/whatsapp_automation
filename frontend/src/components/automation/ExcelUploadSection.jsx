@@ -18,6 +18,8 @@ export default function ExcelUploadSection({
   instances,
   selectedInstanceId,
   onSelectInstance,
+  /** 'green' | 'meta' — determines which Excel parsing path the backend uses. Default 'green'. */
+  provider = 'green',
 }) {
   const inputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
@@ -50,7 +52,8 @@ export default function ExcelUploadSection({
     try {
       const formData = new FormData();
       formData.append('file', file);
-      if (selectedInstanceId) {
+      formData.append('provider', provider);
+      if (provider !== 'meta' && selectedInstanceId) {
         formData.append('greenInstanceId', selectedInstanceId);
       }
       const data = await uploadFile(formData);

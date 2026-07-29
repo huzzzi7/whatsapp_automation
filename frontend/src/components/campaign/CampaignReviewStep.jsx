@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Button from '../ui/Button';
-import { startCampaign, getCampaignStatus, logCampaign, listGreenInstances, getCampaignPreview } from '../../api';
+import {
+  startCampaign,
+  getCampaignStatus,
+  logCampaign,
+  listGreenInstances,
+  getCampaignPreview,
+  listMetaTemplates,
+} from '../../api';
 import AuthStatusBadge from '../ui/AuthStatusBadge';
 import { applyTemplatesToUploadResult } from '../../utils/campaignTemplates';
 import { buildCampaignLogPayload } from '../../utils/campaignLog';
@@ -10,25 +17,30 @@ const POLL_MS = 1500;
 
 /**
  * @param {object} props
+ * @param {'green'|'meta'} [props.provider]
  * @param {object | null} props.uploadResult
  * @param {string} props.selectedInstanceId
  * @param {{ id: string; name?: string }[]} props.instances
  * @param {string} [props.campaignName]
  * @param {{ templates: string[] }} props.campaignSettings
+ * @param {{ metaTemplateId: string, campaignStartDate: string, campaignEndDate: string, operationalDays: string }} [props.metaSettings]
  * @param {{ phone?: string; university?: string; link?: string; group?: string; greenInstanceId?: string }} [props.testSettings]
  * @param {() => void} props.onBack
  * @param {(jobId: string) => void} props.onCampaignStart
  */
 export default function CampaignReviewStep({
+  provider = 'green',
   uploadResult,
   selectedInstanceId,
   instances,
   campaignName = '',
   campaignSettings,
+  metaSettings,
   testSettings,
   onBack,
   onCampaignStart,
 }) {
+  const isMeta = provider === 'meta';
   const [startError, setStartError] = useState('');
   const [starting, setStarting] = useState(false);
   const [jobId, setJobId] = useState('');
@@ -41,11 +53,22 @@ export default function CampaignReviewStep({
   const [preview, setPreview] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState('');
+  const [metaTemplate, setMetaTemplate] = useState(null);
 
-  const mergedUpload = useMemo(
-    () => applyTemplatesToUploadResult(uploadResult, campaignSettings?.templates || []),
-    [uploadResult, campaignSettings?.templates],
-  );
+  useEffect(() => {
+    if (!isMeta || !metaSettings?.metaTemplateId) return;
+    listMetaTemplates()
+      .then((list) => {
+        const found = list.find((t) => String(t.id) === String(metaSettings.metaTemplateId));
+        setMetaTemplate(found || null);
+      })
+      .catch(() => setMetaTemplate(null));
+  }, [isMeta, metaSettings?.metaTemplateId]);
+
+  const mergedUpload = useMemo(() => {
+    if (isMeta) return uploadResult;
+    return applyTemplatesToUploadResult(uploadResult, campaignSettings?.templates || []);
+  }, [isMeta, uploadResult, campaignSettings?.templates]);
 
   const [instanceCount, setInstanceCount] = useState(instances?.length || 0);
 
@@ -65,6 +88,7 @@ export default function CampaignReviewStep({
   const campaignEndDate = String(campaignSettings?.campaignEndDate || '');
 
   useEffect(() => {
+    if (isMeta) return undefined;
     let cancelled = false;
     async function fetchPreview() {
       setPreviewLoading(true);
@@ -97,6 +121,7 @@ export default function CampaignReviewStep({
       cancelled = true;
     };
   }, [
+    isMeta,
     uploadResult,
     manualInstanceId,
     campaignSettings?.instanceMode,
@@ -154,8 +179,12 @@ export default function CampaignReviewStep({
   const submitStart = useCallback(async () => {
     setStartError('');
     loggedRef.current = false;
-    if (instanceMode === 'manual' && !manualInstanceId) {
+    if (!isMeta && instanceMode === 'manual' && !manualInstanceId) {
       setStartError('Select a WhatsApp instance.');
+      return false;
+    }
+    if (isMeta && !String(metaSettings?.metaTemplateId || '').trim()) {
+      setStartError('Choose a Meta template.');
       return false;
     }
     const users = mergedUpload?.users;
@@ -173,15 +202,23 @@ export default function CampaignReviewStep({
     setStarting(true);
     try {
       const trimmedName = cleanName;
-      const data = await startCampaign(users, {
-        greenInstanceId: instanceMode === 'manual' ? manualInstanceId : null,
-        name: trimmedName,
-        operationalStart,
-        operationalEnd,
-        operationalDays,
-        campaignStartDate,
-        campaignEndDate,
-      });
+      const data = isMeta
+        ? await startCampaign(users, {
+            provider: 'meta',
+            metaTemplateId: metaSettings?.metaTemplateId,
+            name: trimmedName,
+            campaignStartDate: metaSettings?.campaignStartDate,
+            campaignEndDate: metaSettings?.campaignEndDate,
+          })
+        : await startCampaign(users, {
+            greenInstanceId: instanceMode === 'manual' ? manualInstanceId : null,
+            name: trimmedName,
+            operationalStart,
+            operationalEnd,
+            operationalDays,
+            campaignStartDate,
+            campaignEndDate,
+          });
       if (!data?.ok || !data.jobId) {
         setStartError(data?.error || 'Campaign start failed.');
         return false;
@@ -200,9 +237,11 @@ export default function CampaignReviewStep({
       setStarting(false);
     }
   }, [
+    isMeta,
     mergedUpload,
     selectedInstanceId,
     campaignSettings,
+    metaSettings,
     campaignName,
     onCampaignStart,
     instanceMode,
@@ -279,6 +318,33 @@ export default function CampaignReviewStep({
   return (
     <div className="campaign-review-step">
       {/* Instance Preview Panel */}
+      {isMeta ? (
+        <div
+          style={{
+            marginBottom: '1.5rem',
+            padding: '1rem',
+            border: '1px solid var(--border)',
+            borderRadius: 10,
+            background: 'var(--bg)',
+          }}
+        >
+          <h3 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 600 }}>Meta Cloud API</h3>
+          <p style={{ margin: '0 0 0.35rem' }}>
+            <strong>Template</strong>: {metaTemplate?.name || `#${metaSettings?.metaTemplateId || '—'}`}
+            {metaTemplate?.languageCode ? ` (${metaTemplate.languageCode})` : ''}
+          </p>
+          {metaTemplate ? (
+            <p style={{ margin: '0 0 0.35rem', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              {metaTemplate.variables.length > 0
+                ? `Variables: ${metaTemplate.variables.join(', ')}`
+                : 'No variables required.'}
+            </p>
+          ) : null}
+          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+            Up to 1800 messages/day, spread evenly across 00:00–23:59.
+          </p>
+        </div>
+      ) : (
       <div
         style={{
           marginBottom: '1.5rem',
@@ -375,13 +441,39 @@ export default function CampaignReviewStep({
           </>
         )}
       </div>
+      )}
 
       <h2 style={{ marginTop: 0 }}>Review &amp; send</h2>
       <p style={{ color: 'var(--text-muted)', marginBottom: '1rem' }}>
-        Confirm details below, then start the campaign. Message 1 will be sent to each recipient; replies trigger the
-        rest of the sequence.
+        {isMeta
+          ? 'Confirm details below, then start the campaign.'
+          : 'Confirm details below, then start the campaign. Message 1 will be sent to each recipient; replies trigger the rest of the sequence.'}
       </p>
 
+      {isMeta ? (
+        <div
+          style={{
+            border: '1px solid var(--border)',
+            borderRadius: 10,
+            padding: '1rem',
+            marginBottom: '1rem',
+            background: 'var(--bg)',
+          }}
+        >
+          <p style={{ margin: '0 0 0.5rem' }}>
+            <strong>Total users</strong>: {totalRecipients}
+          </p>
+          <p style={{ margin: '0 0 0.5rem' }}>
+            <strong>Start date</strong>: {metaSettings?.campaignStartDate || '—'}
+          </p>
+          <p style={{ margin: '0 0 0.5rem' }}>
+            <strong>End date</strong>: {metaSettings?.campaignEndDate || '—'}
+          </p>
+          <p style={{ margin: 0 }}>
+            <strong>Operational days</strong>: {fmtOperationalDaysHuman(metaSettings?.operationalDays)}
+          </p>
+        </div>
+      ) : (
       <div
         style={{
           border: '1px solid var(--border)',
@@ -440,6 +532,7 @@ export default function CampaignReviewStep({
           </p>
         ) : null}
       </div>
+      )}
 
       {startError ? <div className="alert-error" style={{ marginBottom: '1rem' }}>{startError}</div> : null}
       {jobError ? <div className="alert-error" style={{ marginBottom: '1rem' }}>{jobError}</div> : null}

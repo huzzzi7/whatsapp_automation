@@ -149,6 +149,10 @@ export async function startCampaign(users, options = {}) {
     campaignEndDate: options?.campaignEndDate,
     ...(options?.scheduledAt != null && String(options.scheduledAt).trim() !== '' ? { scheduledAt: options.scheduledAt } : {}),
   };
+  if (options?.provider === 'meta') {
+    body.provider = 'meta';
+    body.metaTemplateId = options?.metaTemplateId;
+  }
   const gid = options?.greenInstanceId != null ? String(options.greenInstanceId).trim() : '';
   if (gid) body.greenInstanceId = gid;
   return apiFetch('/api/campaign/start', {
@@ -310,6 +314,31 @@ export async function sendMetaTestTemplate(payload) {
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export async function listMetaTemplates() {
+  const data = await apiFetch('/api/meta-templates', { method: 'GET' });
+  return data?.templates ?? [];
+}
+
+export async function createMetaTemplate(payload) {
+  const data = await apiFetch('/api/meta-templates', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return data?.template;
+}
+
+export async function updateMetaTemplate(id, payload) {
+  const data = await apiFetch(`/api/meta-templates/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+  return data?.template;
+}
+
+export async function deleteMetaTemplate(id) {
+  return apiFetch(`/api/meta-templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 export async function uploadFile(formData) {

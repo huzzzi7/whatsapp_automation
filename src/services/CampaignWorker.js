@@ -21,6 +21,9 @@ const {
   countPendingContacts,
   getGreenInstanceById,
 } = require('../repositories/campaignRepository');
+const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
+const { getMetaTemplateById } = require('../repositories/metaTemplateRepository');
+const { sendMetaTemplateBatch } = require('./metaCampaignSend');
 const { createLogger } = require('../utils/logger');
 const { recalculateActiveCampaigns } = require('./campaignRecalculator');
 
@@ -301,16 +304,32 @@ async function runCampaignWorker(campaignId, opts = {}) {
       : null;
   const isMultiInstance = Boolean(campaign.isMultiInstance);
   const timeZone = process.env.CAMPAIGN_TIMEZONE || 'Europe/London';
+  const isMeta = campaign.provider === 'meta';
 
-  const [instRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
-    greenInstanceDbId,
-  ]);
-  const instRow = instRows[0];
-  if (!instRow) {
-    throw new Error(`Green instance not found for campaign: ${greenInstanceDbId}`);
+  let greenApi = null;
+  let metaConfig = null;
+  let metaTemplate = null;
+
+  if (isMeta) {
+    metaConfig = await getMetaConfigRow();
+    if (!metaConfig || !metaConfig.isEnabled) {
+      throw new Error('Meta config not found or disabled');
+    }
+    metaTemplate = await getMetaTemplateById(campaign.metaTemplateId);
+    if (!metaTemplate) {
+      throw new Error(`Meta template not found for campaign: ${campaign.metaTemplateId}`);
+    }
+  } else {
+    const [instRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
+      greenInstanceDbId,
+    ]);
+    const instRow = instRows[0];
+    if (!instRow) {
+      throw new Error(`Green instance not found for campaign: ${greenInstanceDbId}`);
+    }
+    greenApi = resolveGreenApiConfig(instRow);
   }
 
-  const greenApi = resolveGreenApiConfig(instRow);
   const stableCampaignId = `campaign-${campaignId}`;
   const campLog = createLogger('worker', { campaignId: stableCampaignId, greenInstanceDbId });
 
@@ -443,26 +462,28 @@ async function runCampaignWorker(campaignId, opts = {}) {
       }
     }
 
-    const giGate = await getGreenInstanceById(greenInstanceDbId);
-    if (!giGate || !giGate.isActive || giGate.manualDisabled) {
-      if (current.isMultiInstance) {
+    if (!isMeta) {
+      const giGate = await getGreenInstanceById(greenInstanceDbId);
+      if (!giGate || !giGate.isActive || giGate.manualDisabled) {
+        if (current.isMultiInstance) {
+          campLog.warn(
+            { event: 'campaign_instance_unauthorized_worker_exit', greenInstanceDbId, isMultiInstance: true },
+            'multi-instance worker exiting: instance unauthorized, not pausing campaign — recalculator will reassign',
+          );
+          recalculateActiveCampaigns().catch((err) =>
+            campLog.warn({ event: 'recalc_after_gigate_error', err: err?.message }, 'recalc fire-and-forget failed'),
+          );
+          return;
+        }
         campLog.warn(
-          { event: 'campaign_instance_unauthorized_worker_exit', greenInstanceDbId, isMultiInstance: true },
-          'multi-instance worker exiting: instance unauthorized, not pausing campaign — recalculator will reassign',
+          { event: 'campaign_instance_unauthorized_stopping', greenInstanceDbId },
+          'instance unauthorized or disabled, pausing campaign worker',
         );
-        recalculateActiveCampaigns().catch((err) =>
-          campLog.warn({ event: 'recalc_after_gigate_error', err: err?.message }, 'recalc fire-and-forget failed'),
-        );
+        await updateCampaignStatus(campaignId, 'paused', {
+          errorMessage: 'auto_paused: instance went unauthorized during campaign',
+        });
         return;
       }
-      campLog.warn(
-        { event: 'campaign_instance_unauthorized_stopping', greenInstanceDbId },
-        'instance unauthorized or disabled, pausing campaign worker',
-      );
-      await updateCampaignStatus(campaignId, 'paused', {
-        errorMessage: 'auto_paused: instance went unauthorized during campaign',
-      });
-      return;
     }
 
     const contacts = isMultiInstance
@@ -506,27 +527,29 @@ async function runCampaignWorker(campaignId, opts = {}) {
       return false;
     };
 
-    const { sentPhoneDigits, failedSends } = await sendFirstMessageOnlyWithStore(
-      users,
-      { messageTemplates: appConfig.messageTemplates },
-      {
-        greenApi,
-        greenInstanceDbId,
-        stableCampaignId,
-        pauseCheck,
-      },
-      state,
-      '',
-      {
-        shouldSkipUser() {
-          // Disabled skip logic for campaigns (allow resend)
-          if (false) {
-            return true;
-          }
-          return false;
-        },
-      },
-    );
+    const { sentPhoneDigits, failedSends } = isMeta
+      ? await sendMetaTemplateBatch(users, { metaConfig, metaTemplate })
+      : await sendFirstMessageOnlyWithStore(
+          users,
+          { messageTemplates: appConfig.messageTemplates },
+          {
+            greenApi,
+            greenInstanceDbId,
+            stableCampaignId,
+            pauseCheck,
+          },
+          state,
+          '',
+          {
+            shouldSkipUser() {
+              // Disabled skip logic for campaigns (allow resend)
+              if (false) {
+                return true;
+              }
+              return false;
+            },
+          },
+        );
 
     const sentSet = new Set(sentPhoneDigits);
 
@@ -542,7 +565,7 @@ async function runCampaignWorker(campaignId, opts = {}) {
         sent += 1;
         continue;
       }
-      if (firstMessageEmpty(u)) {
+      if (!isMeta && firstMessageEmpty(u)) {
         await markContactSkipped(Number(c.id), 'Empty or invalid first message / sequence');
         skipped += 1;
         continue;

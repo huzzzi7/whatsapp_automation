@@ -8,6 +8,7 @@ const REQUIRED = [
   'users',
   'green_instances',
   'meta_config',
+  'meta_templates',
   'campaigns',
   'campaign_contacts',
   'sessions',
@@ -49,6 +50,16 @@ const DDL = {
   isEnabled TINYINT(1) NOT NULL DEFAULT 1,
   createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,
   updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  meta_templates: `CREATE TABLE IF NOT EXISTS meta_templates (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  language_code VARCHAR(20) NOT NULL,
+  category VARCHAR(50) NULL,
+  variables JSON NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
   campaigns: `CREATE TABLE IF NOT EXISTS campaigns (
@@ -200,6 +211,7 @@ async function runCoreMigrations() {
     'users',
     'green_instances',
     'meta_config',
+    'meta_templates',
     'campaigns',
     'campaign_contacts',
     'sessions',
@@ -240,6 +252,7 @@ async function runCoreMigrations() {
   await ensureCampaignScheduleColumns(conn);
   await ensureCampaignContactsAssignmentColumn(conn);
   await ensureMetaConfigAndCampaignProviderColumns(conn);
+  await ensureCampaignMetaTemplateColumn(conn);
 
   await conn.end();
 }
@@ -412,6 +425,23 @@ async function ensureMetaConfigAndCampaignProviderColumns(conn) {
     await conn.query('ALTER TABLE campaigns MODIFY green_instance_id CHAR(36) NULL DEFAULT NULL');
   } catch (err) {
     console.warn('MIGRATE: campaigns green_instance_id nullable:', err.message);
+  }
+}
+
+/** campaigns.meta_template_id — which registered meta_templates row a Meta campaign uses. */
+async function ensureCampaignMetaTemplateColumn(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'campaigns' AND COLUMN_NAME = 'meta_template_id'`,
+    [schema],
+  );
+  if (Number(rows[0]?.cnt) === 0) {
+    console.log('MIGRATE: campaigns — adding meta_template_id column');
+    await conn.query('ALTER TABLE campaigns ADD COLUMN meta_template_id INT NULL DEFAULT NULL');
   }
 }
 

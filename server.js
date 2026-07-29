@@ -23,7 +23,7 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const pool = require('./src/mysql');
 const { validateCredentials, requireAuth, requireAdmin } = require('./src/auth');
-const { readExcelFromBuffer } = require('./src/excel');
+const { readExcelFromBuffer, readExcelHeaderBasedFromBuffer } = require('./src/excel');
 const { buildSequence } = require('./src/messages');
 const { sendAllUsers } = require('./src/send');
 const { sendFirstMessageOnly, onIncomingReply, sendFirstMessageOnlyWithStore } = require('./src/replyFlow');
@@ -64,6 +64,7 @@ const {
   getCampaignInstanceNamesForCampaignIds,
 } = require('./src/repositories/campaignRepository');
 const { tryRunNext } = require('./src/services/CampaignCoordinator');
+const metaTemplateRepository = require('./src/repositories/metaTemplateRepository');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
 const { startWarmupSession, stopWarmupSession, getWarmupStatus } = require('./src/services/WarmupCoordinator');
 const warmupRepository = require('./src/repositories/warmupRepository');
@@ -1036,6 +1037,76 @@ app.post('/api/meta/test-send', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Meta templates (registry for campaign use) ─────────────────────────
+app.get('/api/meta-templates', requireAdmin, async (req, res) => {
+  try {
+    const templates = await metaTemplateRepository.listMetaTemplates();
+    return res.json({ success: true, templates });
+  } catch (err) {
+    console.error('[Meta templates list]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to list templates.' });
+  }
+});
+
+app.post('/api/meta-templates', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const name = body.name != null ? String(body.name).trim() : '';
+    const languageCode = body.languageCode != null ? String(body.languageCode).trim() : '';
+    const category = body.category;
+    const variables = Array.isArray(body.variables) ? body.variables : [];
+    if (!name || !languageCode) {
+      return res.status(400).json({ success: false, error: 'name and languageCode are required.' });
+    }
+    const template = await metaTemplateRepository.createMetaTemplate({ name, languageCode, category, variables });
+    return res.json({ success: true, template });
+  } catch (err) {
+    console.error('[Meta templates create]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to create template.' });
+  }
+});
+
+app.put('/api/meta-templates/:id', requireAdmin, async (req, res) => {
+  try {
+    const existing = await metaTemplateRepository.getMetaTemplateById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    const body = req.body || {};
+    const name = body.name != null ? String(body.name).trim() : '';
+    const languageCode = body.languageCode != null ? String(body.languageCode).trim() : '';
+    const category = body.category;
+    const variables = Array.isArray(body.variables) ? body.variables : [];
+    if (!name || !languageCode) {
+      return res.status(400).json({ success: false, error: 'name and languageCode are required.' });
+    }
+    const template = await metaTemplateRepository.updateMetaTemplate(req.params.id, {
+      name,
+      languageCode,
+      category,
+      variables,
+    });
+    return res.json({ success: true, template });
+  } catch (err) {
+    console.error('[Meta templates update]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to update template.' });
+  }
+});
+
+app.delete('/api/meta-templates/:id', requireAdmin, async (req, res) => {
+  try {
+    const existing = await metaTemplateRepository.getMetaTemplateById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    await metaTemplateRepository.deleteMetaTemplate(req.params.id);
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[Meta templates delete]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to delete template.' });
+  }
+});
+
 // POST /api/upload – accept .xlsx, parse, return users + grouping
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
@@ -1053,7 +1124,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       return res.status(400).json({ error: 'Only .xlsx files are allowed.' });
     }
 
-    if (greenInstanceDbId) {
+    const provider = String(req.body?.provider || 'green').trim() === 'meta' ? 'meta' : 'green';
+
+    if (provider === 'green' && greenInstanceDbId) {
       const [instRows2] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
         greenInstanceDbId,
       ]);
@@ -1061,6 +1134,16 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
       if (!inst) {
         return res.status(400).json({ error: 'Invalid greenInstanceId.' });
       }
+    }
+
+    if (provider === 'meta') {
+      let metaUsers;
+      try {
+        metaUsers = readExcelHeaderBasedFromBuffer(req.file.buffer, config.defaultCountryCode);
+      } catch (err) {
+        return res.status(400).json({ error: `Invalid Excel: ${err.message}` });
+      }
+      return res.json({ users: metaUsers, totalUsers: metaUsers.length });
     }
 
     let users;
@@ -1394,6 +1477,8 @@ app.post('/api/campaign/start', async (req, res) => {
     campaignStartDate: rawCampaignStartDate,
     campaignEndDate: rawCampaignEndDate,
   } = body;
+  const provider = String(body.provider || 'green').trim() === 'meta' ? 'meta' : 'green';
+  const metaTemplateId = body.metaTemplateId != null ? Number(body.metaTemplateId) : null;
   const campaignName = body.name && String(body.name).trim() ? String(body.name).trim() : null;
   if (!bodyUsers || !Array.isArray(bodyUsers) || bodyUsers.length === 0) {
     return res.status(400).json({
@@ -1401,15 +1486,30 @@ app.post('/api/campaign/start', async (req, res) => {
       error: 'Missing or empty users array.',
     });
   }
+  if (provider === 'meta' && (!Number.isFinite(metaTemplateId) || metaTemplateId <= 0)) {
+    return res.status(400).json({ ok: false, error: 'metaTemplateId is required for Meta campaigns.' });
+  }
 
   const envOpStart = String(process.env.CAMPAIGN_OPERATIONAL_START || '09:00').trim() || '09:00';
   const envOpEnd = String(process.env.CAMPAIGN_OPERATIONAL_END || '21:00').trim() || '21:00';
-  const operationalStart = rawOperationalStart != null && String(rawOperationalStart).trim() !== '' ? String(rawOperationalStart).trim() : envOpStart;
-  const operationalEnd = rawOperationalEnd != null && String(rawOperationalEnd).trim() !== '' ? String(rawOperationalEnd).trim() : envOpEnd;
+  const operationalStart =
+    provider === 'meta'
+      ? '00:00'
+      : rawOperationalStart != null && String(rawOperationalStart).trim() !== ''
+        ? String(rawOperationalStart).trim()
+        : envOpStart;
+  const operationalEnd =
+    provider === 'meta'
+      ? '23:59'
+      : rawOperationalEnd != null && String(rawOperationalEnd).trim() !== ''
+        ? String(rawOperationalEnd).trim()
+        : envOpEnd;
   const operationalDays =
-    rawOperationalDays != null && String(rawOperationalDays).trim() !== ''
-      ? String(rawOperationalDays).trim()
-      : '1,2,3,4,5';
+    provider === 'meta'
+      ? '0,1,2,3,4,5,6'
+      : rawOperationalDays != null && String(rawOperationalDays).trim() !== ''
+        ? String(rawOperationalDays).trim()
+        : '1,2,3,4,5';
 
   function hhmmToMinutes(hhmm) {
     const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || '').trim());
@@ -1458,42 +1558,55 @@ app.post('/api/campaign/start', async (req, res) => {
       if (!Number.isNaN(d.getTime())) scheduleDate = d;
     }
 
-    const gid = String(greenInstanceId || '').trim();
     let isMultiInstance = false;
     let instances = [];
     let dailyLimitPerInstance = null;
-    let chosenCampaignInstanceId = gid || null;
+    let chosenCampaignInstanceId = null;
 
-    if (gid) {
-      const [campRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
-      const row = campRows[0];
-      if (!row) {
-        return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
+    if (provider === 'meta') {
+      const template = await metaTemplateRepository.getMetaTemplateById(metaTemplateId);
+      if (!template) {
+        return res.status(400).json({ ok: false, error: 'Invalid metaTemplateId.' });
       }
-      instances = [row];
+      chosenCampaignInstanceId = 'meta';
       isMultiInstance = false;
-      dailyLimitPerInstance = null;
-      chosenCampaignInstanceId = gid;
+      dailyLimitPerInstance = Math.min(1800, Math.max(1, Number(body.dailyLimitPerInstance) || 1800));
     } else {
-      instances = await getAvailableInstances();
-      if (!instances.length) {
-        return res.status(400).json({ ok: false, error: 'No WhatsApp instances configured' });
+      const gid = String(greenInstanceId || '').trim();
+      chosenCampaignInstanceId = gid || null;
+      if (gid) {
+        const [campRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [gid]);
+        const row = campRows[0];
+        if (!row) {
+          return res.status(400).json({ ok: false, error: 'Invalid greenInstanceId.' });
+        }
+        instances = [row];
+        isMultiInstance = false;
+        dailyLimitPerInstance = null;
+        chosenCampaignInstanceId = gid;
+      } else {
+        instances = await getAvailableInstances();
+        if (!instances.length) {
+          return res.status(400).json({ ok: false, error: 'No WhatsApp instances configured' });
+        }
+        isMultiInstance = true;
+        chosenCampaignInstanceId = String(instances[0].id || '').trim();
+        dailyLimitPerInstance = await calculateDailyLimit(
+          bodyUsers.length,
+          instances,
+          campaignStartDate,
+          new Date(campaignEndDate),
+          operationalDays,
+          operationalEnd,
+        );
       }
-      isMultiInstance = true;
-      chosenCampaignInstanceId = String(instances[0].id || '').trim();
-      dailyLimitPerInstance = await calculateDailyLimit(
-        bodyUsers.length,
-        instances,
-        campaignStartDate,
-        new Date(campaignEndDate),
-        operationalDays,
-        operationalEnd,
-      );
     }
 
     await createCampaign({
       id: campaignId,
       greenInstanceId: chosenCampaignInstanceId,
+      provider,
+      metaTemplateId: provider === 'meta' ? metaTemplateId : null,
       name: campaignName,
       batchSize: safeBatchSize,
       totalContacts: bodyUsers.length,
@@ -1573,7 +1686,7 @@ app.post('/api/campaign/start', async (req, res) => {
       ok: true,
       campaignId,
       jobId: campaignId,
-      instanceCount: instances.length,
+      instanceCount: provider === 'meta' ? 1 : instances.length,
       dailyLimitPerInstance,
     });
   } catch (err) {

@@ -37,6 +37,8 @@ function mapCampaignRow(row) {
     greenInstanceId: row.green_instance_id,
     greenInstanceName: row.instance_name != null ? String(row.instance_name) : null,
     greenInstancePhone: row.instance_phone != null ? String(row.instance_phone) : null,
+    provider: row.provider || 'green',
+    metaTemplateId: row.meta_template_id ?? null,
     name: row.name,
     status: row.status,
     queueOrder: row.queue_order,
@@ -73,6 +75,8 @@ function mapCampaignRow(row) {
 async function createCampaign({
   id,
   greenInstanceId,
+  provider = 'green',
+  metaTemplateId = null,
   name = null,
   batchSize,
   totalContacts,
@@ -117,17 +121,22 @@ async function createCampaign({
       ? Math.max(1, Math.floor(Number(dailyLimitPerInstance)))
       : null;
   const multi = isMultiInstance ? 1 : 0;
+  const providerValue = provider === 'meta' ? 'meta' : 'green';
+  const metaTemplateIdValue =
+    metaTemplateId != null && Number.isFinite(Number(metaTemplateId)) ? Number(metaTemplateId) : null;
 
   await pool.execute(
     `INSERT INTO campaigns (
-      id, green_instance_id, name, status, queue_order, total_contacts,
+      id, green_instance_id, provider, meta_template_id, name, status, queue_order, total_contacts,
       batch_size, scheduled_at,
       operational_start, operational_end, operational_days, campaign_start_date, campaign_end_date,
       daily_limit_per_instance, is_multi_instance
-    ) VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       greenInstanceId,
+      providerValue,
+      metaTemplateIdValue,
       name == null || name === '' ? null : String(name).slice(0, 255),
       queueOrder,
       totalContacts,

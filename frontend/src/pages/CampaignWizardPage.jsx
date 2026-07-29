@@ -5,6 +5,10 @@ import CampaignStepper from '../components/campaign/CampaignStepper';
 import ExcelUploadSection from '../components/automation/ExcelUploadSection';
 import { getConfig, listGreenInstances } from '../api';
 import CampaignSettingsForm from '../components/campaign/CampaignSettingsForm';
+import MetaCampaignSettingsForm, {
+  normalizeMetaCampaignSettings,
+  validateMetaCampaignSettings,
+} from '../components/campaign/MetaCampaignSettingsForm';
 import CampaignTestForm from '../components/campaign/CampaignTestForm';
 import CampaignReviewStep from '../components/campaign/CampaignReviewStep';
 import ExcelPreviewTable from '../components/campaign/ExcelPreviewTable';
@@ -34,6 +38,7 @@ export default function CampaignWizardPage() {
   const navigate = useNavigate();
   const [currentStep, setCurrentStep] = useState(1);
   const [wizardData, setWizardData] = useState({
+    provider: 'green',
     selectedInstanceId: '',
     uploadResult: null,
     campaignSettings: {
@@ -46,6 +51,7 @@ export default function CampaignWizardPage() {
       instanceMode: 'auto',
       selectedInstanceId: '',
     },
+    metaSettings: normalizeMetaCampaignSettings({}),
     testState: {
       status: 'idle',
     },
@@ -128,7 +134,14 @@ export default function CampaignWizardPage() {
         return;
       }
     }
-    if (currentStep === 2) {
+    if (currentStep === 2 && wizardData.provider === 'meta') {
+      const result = validateMetaCampaignSettings(wizardData.metaSettings);
+      if (!result.ok) {
+        setStepError(result.error);
+        return;
+      }
+    }
+    if (currentStep === 2 && wizardData.provider !== 'meta') {
       const cs = wizardData.campaignSettings;
       const templates = cs?.templates;
       const hasTemplates =
@@ -268,6 +281,17 @@ export default function CampaignWizardPage() {
     setStepError('');
   }, []);
 
+  const setProvider = useCallback((provider) => {
+    setWizardData((prev) => ({
+      ...prev,
+      provider,
+      uploadResult: null,
+    }));
+    setUploadSuccess('');
+    setUploadError('');
+    setStepError('');
+  }, []);
+
   return (
     <div>
       <h1>Campaign Wizard</h1>
@@ -308,11 +332,37 @@ export default function CampaignWizardPage() {
                 </p>
               ) : null}
             </div>
+            <div className="campaign-provider-field">
+              <span className="ui-input-label" style={{ display: 'block', marginBottom: 6 }}>
+                Send via
+              </span>
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="radio"
+                    name="campaign-provider"
+                    checked={wizardData.provider !== 'meta'}
+                    onChange={() => setProvider('green')}
+                  />
+                  <span>Green API (legacy, message sequence)</span>
+                </label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="radio"
+                    name="campaign-provider"
+                    checked={wizardData.provider === 'meta'}
+                    onChange={() => setProvider('meta')}
+                  />
+                  <span>Meta Cloud API (template)</span>
+                </label>
+              </div>
+            </div>
             <ExcelUploadSection
               onUploaded={handleUploaded}
               onError={handleUploadError}
               disabled={false}
               showCampaignSettingsButton={false}
+              provider={wizardData.provider}
             />
             {uploadError ? <div className="alert-error">{uploadError}</div> : null}
             {uploadSuccess ? <div className="alert-success">{uploadSuccess}</div> : null}
@@ -333,51 +383,76 @@ export default function CampaignWizardPage() {
             <h2 className="campaign-message-modal__title" style={{ marginTop: 0 }}>
               Campaign Settings
             </h2>
-            <CampaignSettingsForm
-              value={wizardData.campaignSettings}
-              onChange={(updated) => {
-                setStepError('');
-                setWizardData((prev) => ({
-                  ...prev,
-                  campaignSettings: updated,
-                }));
-              }}
-              instances={instances}
-              error={stepError || undefined}
-              totalContacts={wizardData.uploadResult?.totalUsers ?? wizardData.uploadResult?.users?.length ?? 0}
-              instanceCount={instances.length || 1}
-              rateConfig={rateConfig}
-            />
+            {wizardData.provider === 'meta' ? (
+              <MetaCampaignSettingsForm
+                value={wizardData.metaSettings}
+                onChange={(updated) => {
+                  setStepError('');
+                  setWizardData((prev) => ({
+                    ...prev,
+                    metaSettings: updated,
+                  }));
+                }}
+                error={stepError || undefined}
+              />
+            ) : (
+              <CampaignSettingsForm
+                value={wizardData.campaignSettings}
+                onChange={(updated) => {
+                  setStepError('');
+                  setWizardData((prev) => ({
+                    ...prev,
+                    campaignSettings: updated,
+                  }));
+                }}
+                instances={instances}
+                error={stepError || undefined}
+                totalContacts={wizardData.uploadResult?.totalUsers ?? wizardData.uploadResult?.users?.length ?? 0}
+                instanceCount={instances.length || 1}
+                rateConfig={rateConfig}
+              />
+            )}
           </>
         ) : currentStep === 3 ? (
           <>
             <h2 className="test-message-modal__title" style={{ marginTop: 0 }}>
               Test campaign (optional)
             </h2>
-            <p style={{ color: 'var(--text-muted)', marginBottom: '1rem', fontSize: '14px' }}>
-              Send a test message to one number, or skip to start the full campaign.
-            </p>
-            <CampaignTestForm
-              value={wizardData.testSettings}
-              onChange={(updated) => {
-                setStepError('');
-                setWizardData((prev) => ({
-                  ...prev,
-                  testSettings: updated,
-                }));
-              }}
-              instances={instances}
-              messageTemplateStrings={wizardData.campaignSettings.templates}
-              error={stepError || undefined}
-            />
+            {wizardData.provider === 'meta' ? (
+              <p style={{ color: 'var(--text-muted)', marginBottom: '1rem', fontSize: '14px' }}>
+                Use the "Send test template" tool on the Settings page to test this template before sending. Click
+                Skip to continue to the full campaign.
+              </p>
+            ) : (
+              <>
+                <p style={{ color: 'var(--text-muted)', marginBottom: '1rem', fontSize: '14px' }}>
+                  Send a test message to one number, or skip to start the full campaign.
+                </p>
+                <CampaignTestForm
+                  value={wizardData.testSettings}
+                  onChange={(updated) => {
+                    setStepError('');
+                    setWizardData((prev) => ({
+                      ...prev,
+                      testSettings: updated,
+                    }));
+                  }}
+                  instances={instances}
+                  messageTemplateStrings={wizardData.campaignSettings.templates}
+                  error={stepError || undefined}
+                />
+              </>
+            )}
           </>
         ) : currentStep === 4 ? (
           <CampaignReviewStep
+            provider={wizardData.provider}
             uploadResult={wizardData.uploadResult}
             selectedInstanceId={wizardData.campaignSettings?.selectedInstanceId || wizardData.selectedInstanceId}
             instances={instances}
             campaignName={campaignName}
             campaignSettings={wizardData.campaignSettings}
+            metaSettings={wizardData.metaSettings}
             testSettings={wizardData.testSettings}
             onBack={() => goToStep(3)}
             onCampaignStart={(jobId) => {

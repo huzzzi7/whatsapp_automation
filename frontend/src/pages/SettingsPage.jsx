@@ -3,6 +3,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import AuthStatusBadge from '../components/ui/AuthStatusBadge';
 import GreenInstanceModal from '../components/settings/GreenInstanceModal';
+import MetaTemplateManager from '../components/settings/MetaTemplateManager';
 import {
   listGreenInstances,
   deleteGreenInstance,
@@ -431,6 +432,16 @@ export default function SettingsPage() {
             </div>
           </div>
         ) : null}
+      </Card>
+
+      <div style={{ marginTop: '1.5rem' }} />
+
+      <Card>
+        <h2 style={{ marginTop: 0, marginBottom: '0.35rem' }}>Meta Templates</h2>
+        <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          Register the exact template name and variable names Meta approved, then pick one per campaign in the Wizard.
+        </p>
+        <MetaTemplateManager />
       </Card>
 
       {SHOW_GREEN_INSTANCES ? (
