@@ -23,7 +23,7 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const pool = require('./src/mysql');
 const { validateCredentials, requireAuth, requireAdmin } = require('./src/auth');
-const { readExcelFromBuffer, readExcelHeaderBasedFromBuffer } = require('./src/excel');
+const { readExcelFromBuffer } = require('./src/excel');
 const { buildSequence } = require('./src/messages');
 const { sendAllUsers } = require('./src/send');
 const { sendFirstMessageOnly, onIncomingReply, sendFirstMessageOnlyWithStore } = require('./src/replyFlow');
@@ -1139,7 +1139,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     if (provider === 'meta') {
       let metaUsers;
       try {
-        metaUsers = readExcelHeaderBasedFromBuffer(req.file.buffer, config.defaultCountryCode);
+        metaUsers = readExcelFromBuffer(req.file.buffer, config.defaultCountryCode);
       } catch (err) {
         return res.status(400).json({ error: `Invalid Excel: ${err.message}` });
       }
