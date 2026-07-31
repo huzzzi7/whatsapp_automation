@@ -92,12 +92,6 @@ function campaignDisplayLabel(c) {
   return 'Unnamed campaign';
 }
 
-function instanceDisplayLabel(c) {
-  const name = c?.greenInstanceName;
-  if (name != null && String(name).trim() !== '') return String(name).trim();
-  return '—';
-}
-
 /** Formats date or ISO datetime → "19 May 2026". */
 function fmtDate(d) {
   if (d == null || String(d).trim() === '') return '—';
@@ -189,21 +183,6 @@ function InfoModalRow({ label, value }) {
   );
 }
 
-function InstanceAuthBadge({ inst }) {
-  const ok = inst && inst.isActive;
-  return (
-    <span
-      className={
-        ok
-          ? 'campaign-info-modal__auth-badge campaign-info-modal__auth-badge--ok'
-          : 'campaign-info-modal__auth-badge campaign-info-modal__auth-badge--bad'
-      }
-    >
-      {ok ? 'Authorized' : 'Unauthorized'}
-    </span>
-  );
-}
-
 function CampaignInfoModal({ campaign, loading, error, onClose }) {
   return (
     <div
@@ -244,39 +223,19 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
               </div>
 
               <div className="campaign-info-modal__section">
-                <div className="campaign-info-modal__section-title">Mode &amp; instance</div>
-                <InfoModalRow
-                  label="Mode"
-                  value={campaign.isMultiInstance ? 'Automatic (all instances)' : 'Manual (single instance)'}
-                />
-                {Array.isArray(campaign.instanceDetails) && campaign.instanceDetails.length > 0 ? (
-                  <>
-                    <InfoModalRow
-                      label="Active instances"
-                      value={String(campaign.instanceDetails.length)}
-                    />
-                    <ul className="campaign-info-modal__instance-list" aria-label="Participating instances">
-                      {campaign.instanceDetails.map((inst) => (
-                        <li key={inst.id} className="campaign-info-modal__instance-item">
-                          <span className="campaign-info-modal__instance-item-text">
-                            {inst.name || '—'}
-                            {' · '}
-                            {inst.phoneNumber || '—'}
-                            {' · '}
-                            <InstanceAuthBadge inst={inst} />
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                ) : (
-                  <>
-                    <InfoModalRow label="Instance" value={instanceDisplayLabel(campaign)} />
-                    {campaign.greenInstancePhone ? (
-                      <InfoModalRow label="Instance phone" value={String(campaign.greenInstancePhone)} />
-                    ) : null}
-                  </>
-                )}
+                <div className="campaign-info-modal__section-title">Template &amp; phone</div>
+                {campaign.metaTemplateName ? (
+                  <InfoModalRow
+                    label="Template"
+                    value={`${campaign.metaTemplateName}${campaign.metaTemplateLanguageCode ? ` (${campaign.metaTemplateLanguageCode})` : ''}`}
+                  />
+                ) : null}
+                {campaign.metaPhoneDisplayName || campaign.metaPhoneNumberId ? (
+                  <InfoModalRow
+                    label="Phone"
+                    value={`${campaign.metaPhoneDisplayName || ''}${campaign.metaPhoneNumberId ? ` (${campaign.metaPhoneNumberId})` : ''}`}
+                  />
+                ) : null}
               </div>
 
               <div className="campaign-info-modal__section">
@@ -308,10 +267,6 @@ function CampaignInfoModal({ campaign, loading, error, onClose }) {
                   <InfoModalRow label="Delivered (confirmed)" value={String(campaign.deliveredCount)} />
                 ) : null}
                 <InfoModalRow label="% complete" value={`${campaignProgressPercent(campaign)}%`} />
-                <InfoModalRow
-                  label="Daily limit per instance"
-                  value={campaign.dailyLimitPerInstance != null && campaign.dailyLimitPerInstance !== '' ? String(campaign.dailyLimitPerInstance) : '—'}
-                />
               </div>
 
               {campaign.errorMessage ? (
@@ -436,11 +391,6 @@ function normalizeRunningAll(data) {
   return runningAll || [];
 }
 
-function instanceHasRunning(runningAll, greenInstanceId) {
-  const gid = String(greenInstanceId ?? '').trim();
-  if (!gid) return false;
-  return runningAll.some((r) => String(r?.greenInstanceId ?? '').trim() === gid);
-}
 
 const EXPIRED_DAY_OPTIONS = [
   { label: 'Mon', v: 1 },
@@ -728,11 +678,6 @@ export default function CampaignDetailsPage() {
         </div>
         <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <StatusBadge status={c.status} />
-          <span className="campaign-details__queue-meta">
-            {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
-            {' · '}
-            {instanceDisplayLabel(c)}
-          </span>
         </div>
         <p className="campaign-details__stats" style={{ marginTop: '0.75rem' }}>
           Sent <strong>{c.sentCount}</strong>
@@ -769,7 +714,6 @@ export default function CampaignDetailsPage() {
 
   const renderPausedCards = () =>
     pausedList.map((c) => {
-      const blocked = instanceHasRunning(runningList, c.greenInstanceId);
       return (
         <div key={c.id} className="campaign-details__active-card campaign-details__active-card--secondary">
           <div className="campaign-details__card-head">
@@ -783,11 +727,6 @@ export default function CampaignDetailsPage() {
             <StatusBadge status={c.status} />
             <span className="campaign-details__queue-meta"> Queue order #{c.queueOrder}</span>
           </div>
-          <div style={{ marginTop: '0.35rem' }} className="campaign-details__queue-meta">
-            {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
-            {' · '}
-            {instanceDisplayLabel(c)}
-          </div>
           <p className="campaign-details__stats" style={{ marginTop: '0.5rem' }}>
             Sent {c.sentCount} · Failed {campaignFailedCount(c)} · Skipped {campaignSkippedCount(c)} · Total{' '}
             {c.totalContacts} · Remaining {c.remaining}
@@ -798,7 +737,7 @@ export default function CampaignDetailsPage() {
               type="button"
               className="ui-button--inline"
               onClick={() => handleResume(c.id)}
-              disabled={actionBusy || blocked}
+              disabled={actionBusy}
             >
               Resume
             </Button>
@@ -810,11 +749,6 @@ export default function CampaignDetailsPage() {
             >
               Stop
             </Button>
-            {blocked ? (
-              <span className="campaign-details__hint" style={{ marginLeft: '0.5rem' }}>
-                Another campaign is running on this instance.
-              </span>
-            ) : null}
           </div>
         </div>
       );
@@ -856,7 +790,6 @@ export default function CampaignDetailsPage() {
                     <h3 className="campaign-section__title">Queued campaigns</h3>
                     <ul className="campaign-details__queue-list campaign-section__body">
                       {queuedList.map((c) => {
-                        const startBlocked = instanceHasRunning(runningList, c.greenInstanceId);
                         return (
                           <li key={c.id} className="campaign-details__queue-item">
                             <div>
@@ -864,19 +797,9 @@ export default function CampaignDetailsPage() {
                               <div className="campaign-details__queue-meta">
                                 <StatusBadge status="queued" /> Order #{c.queueOrder}
                               </div>
-                              <p className="campaign-details__queue-meta" style={{ marginTop: '0.35rem', marginBottom: 0 }}>
-                                {c.isMultiInstance ? '🔄 Automatic (all instances)' : '📱 Manual'}
-                                {' · '}
-                                {instanceDisplayLabel(c)}
-                              </p>
                               {c.status === 'queued' && c.scheduledAt ? (
                                 <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
                                   Scheduled for: {formatScheduledUk(c.scheduledAt)}
-                                </p>
-                              ) : null}
-                              {startBlocked ? (
-                                <p className="campaign-details__hint" style={{ marginTop: '0.35rem' }}>
-                                  Start blocked: a campaign is already running on this instance.
                                 </p>
                               ) : null}
                             </div>
@@ -895,7 +818,7 @@ export default function CampaignDetailsPage() {
                                 type="button"
                                 className="ui-button--inline ui-button--secondary"
                                 onClick={() => handleStartQueued(c.id)}
-                                disabled={actionBusy || startBlocked}
+                                disabled={actionBusy}
                               >
                                 Start
                               </Button>
@@ -924,7 +847,6 @@ export default function CampaignDetailsPage() {
                   <tr>
                     <th>Campaign name</th>
                     <th>Status</th>
-                    <th>Instance</th>
                     <th>Total</th>
                     <th>Sent</th>
                     <th>Failed</th>
@@ -948,7 +870,6 @@ export default function CampaignDetailsPage() {
                           </div>
                         ) : null}
                       </td>
-                      <td>{instanceDisplayLabel(c)}</td>
                       <td>{c.totalContacts}</td>
                       <td>{c.sentCount}</td>
                       <td>{campaignFailedCount(c)}</td>

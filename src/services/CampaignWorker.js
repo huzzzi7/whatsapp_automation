@@ -1,31 +1,21 @@
 /**
- * DB-backed campaign execution: send message 1 per contact via replyFlow + production state store.
+ * Campaign execution: send Meta template messages per contact.
  */
-const pool = require('../mysql');
-const appConfig = require('../../config');
-const state = require('../state');
-const { buildSequence } = require('../messages');
-const { sendFirstMessageOnlyWithStore } = require('../replyFlow');
-const { resolveGreenApiConfig } = require('../greenInstance');
 const {
   getCampaignById,
   getPendingContacts,
   getDailyContactsSentCount,
   markContactSent,
   markContactFailed,
-  markContactSkipped,
   incrementSentCount,
   incrementFailedCount,
-  incrementSkippedCount,
   updateCampaignStatus,
   countPendingContacts,
-  getGreenInstanceById,
 } = require('../repositories/campaignRepository');
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
 const { getMetaTemplateById } = require('../repositories/metaTemplateRepository');
 const { sendMetaTemplateBatch } = require('./metaCampaignSend');
 const { createLogger } = require('../utils/logger');
-const { recalculateActiveCampaigns } = require('./campaignRecalculator');
 
 function sleepMs(ms) {
   const n = Number(ms);
@@ -226,7 +216,6 @@ async function sleepInChunks(totalMs, chunkMs = 12 * 60 * 60 * 1000) {
   const chunk = Math.max(1000, Math.floor(Number(chunkMs) || 1000));
   while (remaining > 0) {
     const step = Math.min(remaining, chunk);
-    // eslint-disable-next-line no-await-in-loop
     await sleepMs(step);
     remaining -= step;
   }
@@ -254,14 +243,6 @@ function contactsToUsers(contacts, log) {
   });
 }
 
-function firstMessageEmpty(user) {
-  const sequence = user.sequence || buildSequence(user, appConfig.messageTemplates);
-  if (!sequence || sequence.length < 1) return true;
-  const text = sequence[0];
-  return text == null || String(text).trim() === '';
-}
-
-/** After long sleeps: exit loop if campaign was paused/stopped elsewhere (e.g. auth guard). */
 async function exitIfCampaignNotRunningAfterSleep(campaignId, campLog, sleptMs, phase) {
   const ms = Number(sleptMs) || 0;
   if (ms <= 30000) return false;
@@ -281,17 +262,20 @@ async function exitIfCampaignNotRunningAfterSleep(campaignId, campLog, sleptMs, 
   return false;
 }
 
-async function runCampaignWorker(campaignId, opts = {}) {
+async function runCampaignWorker(campaignId) {
   const campaign = await getCampaignById(campaignId);
   if (!campaign) {
     throw new Error(`Campaign not found: ${campaignId}`);
   }
 
-  const workerInstanceId =
-    opts.workerInstanceId != null && String(opts.workerInstanceId).trim() !== ''
-      ? String(opts.workerInstanceId).trim()
-      : null;
-  const greenInstanceDbId = workerInstanceId || campaign.greenInstanceId;
+  const metaConfig = await getMetaConfigRow();
+  if (!metaConfig || !metaConfig.isEnabled) {
+    throw new Error('Meta config not found or disabled');
+  }
+  const metaTemplate = await getMetaTemplateById(campaign.metaTemplateId);
+  if (!metaTemplate) {
+    throw new Error(`Meta template not found for campaign: ${campaign.metaTemplateId}`);
+  }
 
   const operationalStart = campaign.operationalStart || process.env.CAMPAIGN_OPERATIONAL_START || '09:00';
   const operationalEnd = campaign.operationalEnd || process.env.CAMPAIGN_OPERATIONAL_END || '21:00';
@@ -302,36 +286,9 @@ async function runCampaignWorker(campaignId, opts = {}) {
     campaign.dailyLimitPerInstance != null && Number.isFinite(Number(campaign.dailyLimitPerInstance))
       ? Math.max(1, Math.floor(Number(campaign.dailyLimitPerInstance)))
       : null;
-  const isMultiInstance = Boolean(campaign.isMultiInstance);
   const timeZone = process.env.CAMPAIGN_TIMEZONE || 'Europe/London';
-  const isMeta = campaign.provider === 'meta';
 
-  let greenApi = null;
-  let metaConfig = null;
-  let metaTemplate = null;
-
-  if (isMeta) {
-    metaConfig = await getMetaConfigRow();
-    if (!metaConfig || !metaConfig.isEnabled) {
-      throw new Error('Meta config not found or disabled');
-    }
-    metaTemplate = await getMetaTemplateById(campaign.metaTemplateId);
-    if (!metaTemplate) {
-      throw new Error(`Meta template not found for campaign: ${campaign.metaTemplateId}`);
-    }
-  } else {
-    const [instRows] = await pool.execute('SELECT * FROM green_instances WHERE id = ? LIMIT 1', [
-      greenInstanceDbId,
-    ]);
-    const instRow = instRows[0];
-    if (!instRow) {
-      throw new Error(`Green instance not found for campaign: ${greenInstanceDbId}`);
-    }
-    greenApi = resolveGreenApiConfig(instRow);
-  }
-
-  const stableCampaignId = `campaign-${campaignId}`;
-  const campLog = createLogger('worker', { campaignId: stableCampaignId, greenInstanceDbId });
+  const campLog = createLogger('worker', { campaignId });
 
   let batchNum = 0;
 
@@ -372,9 +329,7 @@ async function runCampaignWorker(campaignId, opts = {}) {
         { event: 'campaign_before_start_date', todayIso, startIso, sleepMs: sleepFor },
         'before campaign start date, waiting',
       );
-      // eslint-disable-next-line no-await-in-loop
       await sleepMs(sleepFor);
-      // eslint-disable-next-line no-await-in-loop
       if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, sleepFor, 'before_start_date')) {
         return;
       }
@@ -388,9 +343,7 @@ async function runCampaignWorker(campaignId, opts = {}) {
         { event: 'campaign_outside_operational_hours', sleepMs: sleepFor, timeZone, operationalStart, operationalEnd, operationalDays },
         'outside operational hours, pausing until next window',
       );
-      // eslint-disable-next-line no-await-in-loop
       await sleepMs(sleepFor);
-      // eslint-disable-next-line no-await-in-loop
       if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, sleepFor, 'after_operational_sleep')) {
         return;
       }
@@ -405,24 +358,20 @@ async function runCampaignWorker(campaignId, opts = {}) {
     let sentToday = 0;
     if (effectiveDailyLimit != null) {
       const today = dateStringInTz(new Date(), timeZone);
-      sentToday = await getDailyContactsSentCount(campaignId, greenInstanceDbId, today);
+      sentToday = await getDailyContactsSentCount(campaignId, today);
       if (sentToday >= effectiveDailyLimit) {
-        // Sleep until tomorrow's next operational start in the operational timezone.
         const msUntil = msUntilNextOperationalStart(operationalStart, operationalDays, timeZone);
         campLog.info(
           {
             event: 'campaign_daily_limit_reached',
-            greenInstanceDbId,
             today,
             sentToday,
             dailyLimitPerInstance: effectiveDailyLimit,
             sleepMs: msUntil,
           },
-          'daily limit reached for instance today; sleeping until next operational start',
+          'daily limit reached; sleeping until next operational start',
         );
-        // eslint-disable-next-line no-await-in-loop
         await sleepInChunks(msUntil, 12 * 60 * 60 * 1000);
-        // eslint-disable-next-line no-await-in-loop
         if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, msUntil, 'after_daily_limit_sleep')) {
           return;
         }
@@ -430,14 +379,8 @@ async function runCampaignWorker(campaignId, opts = {}) {
       }
     }
 
-    // Always process 1 contact per loop iteration.
-    // The inter-message delay (CAMPAIGN_INTER_MESSAGE_DELAY_MS) in replyFlow.js controls pace.
-    // batchSize from DB is intentionally ignored — rate is controlled by .env settings only.
     const batchSize = 1;
 
-    // Rate-pacing: wait before fetching+sending each contact.
-    // Formula: windowMs / maxPerWindow = ms per message per instance.
-    // Example: 60000ms / 1 msg = 60s between sends. Set RATE_LIMIT_MESSAGES_PER_WINDOW=1, RATE_LIMIT_WINDOW_MS=60000.
     if (batchNum > 0) {
       const msPerWindow = Math.max(1000, parseInt(process.env.RATE_LIMIT_WINDOW_MS || '60000', 10));
       const maxPerWindow = Math.max(1, parseInt(process.env.RATE_LIMIT_MESSAGES_PER_WINDOW || '1', 10));
@@ -456,47 +399,19 @@ async function runCampaignWorker(campaignId, opts = {}) {
         `pacing: even-spread delay ${spreadDelayMs}ms (pace floor ${paceMs}ms)`,
       );
       await sleepMs(spreadDelayMs);
-      // eslint-disable-next-line no-await-in-loop
       if (await exitIfCampaignNotRunningAfterSleep(campaignId, campLog, spreadDelayMs, 'after_pace_sleep')) {
         return;
       }
     }
 
-    if (!isMeta) {
-      const giGate = await getGreenInstanceById(greenInstanceDbId);
-      if (!giGate || !giGate.isActive || giGate.manualDisabled) {
-        if (current.isMultiInstance) {
-          campLog.warn(
-            { event: 'campaign_instance_unauthorized_worker_exit', greenInstanceDbId, isMultiInstance: true },
-            'multi-instance worker exiting: instance unauthorized, not pausing campaign — recalculator will reassign',
-          );
-          recalculateActiveCampaigns().catch((err) =>
-            campLog.warn({ event: 'recalc_after_gigate_error', err: err?.message }, 'recalc fire-and-forget failed'),
-          );
-          return;
-        }
-        campLog.warn(
-          { event: 'campaign_instance_unauthorized_stopping', greenInstanceDbId },
-          'instance unauthorized or disabled, pausing campaign worker',
-        );
-        await updateCampaignStatus(campaignId, 'paused', {
-          errorMessage: 'auto_paused: instance went unauthorized during campaign',
-        });
-        return;
-      }
-    }
-
-    const contacts = isMultiInstance
-      ? await getPendingContacts(campaignId, batchSize, greenInstanceDbId)
-      : await getPendingContacts(campaignId, batchSize);
+    const contacts = await getPendingContacts(campaignId, batchSize);
 
     if (contacts.length === 0) {
-      // eslint-disable-next-line no-await-in-loop
       const globalPending = await countPendingContacts(campaignId);
       if (globalPending > 0) {
         campLog.info(
-          { event: 'campaign_instance_done_waiting', globalPending, greenInstanceDbId, isMultiInstance },
-          'this instance has no pending work; other contacts still pending globally',
+          { event: 'campaign_done_waiting', globalPending },
+          'no pending work in batch; contacts still pending globally',
         );
         break;
       }
@@ -510,64 +425,18 @@ async function runCampaignWorker(campaignId, opts = {}) {
 
     const users = contactsToUsers(contacts, campLog);
 
-    const pauseCheck = async () => {
-      const c = await getCampaignById(campaignId);
-      if (!c) return true;
-      if (c.status === 'paused') {
-        campLog.info({ event: 'campaign_worker_paused', phase: 'mid_batch' }, 'pause (mid-batch)');
-        return true;
-      }
-      if (c.status !== 'running') {
-        if (c.status === 'stopped') {
-          campLog.info({ event: 'campaign_stopped_by_user', phase: 'mid_batch' }, 'Campaign stopped by user (mid-batch)');
-        }
-        campLog.info({ event: 'campaign_worker_stopped_mid_batch', status: c.status }, `stopped mid-batch (status: ${c.status})`);
-        return true;
-      }
-      return false;
-    };
-
-    const { sentPhoneDigits, failedSends } = isMeta
-      ? await sendMetaTemplateBatch(users, { metaConfig, metaTemplate })
-      : await sendFirstMessageOnlyWithStore(
-          users,
-          { messageTemplates: appConfig.messageTemplates },
-          {
-            greenApi,
-            greenInstanceDbId,
-            stableCampaignId,
-            pauseCheck,
-          },
-          state,
-          '',
-          {
-            shouldSkipUser() {
-              // Disabled skip logic for campaigns (allow resend)
-              if (false) {
-                return true;
-              }
-              return false;
-            },
-          },
-        );
+    const { sentPhoneDigits, failedSends, sentMessageIds } = await sendMetaTemplateBatch(users, { metaConfig, metaTemplate });
 
     const sentSet = new Set(sentPhoneDigits);
 
     let sent = 0;
     let failed = 0;
-    let skipped = 0;
 
     for (let i = 0; i < contacts.length; i += 1) {
       const c = contacts[i];
-      const u = users[i];
       if (sentSet.has(c.phoneNormalized)) {
-        await markContactSent(Number(c.id));
+        await markContactSent(Number(c.id), sentMessageIds?.[c.phoneNormalized]);
         sent += 1;
-        continue;
-      }
-      if (!isMeta && firstMessageEmpty(u)) {
-        await markContactSkipped(Number(c.id), 'Empty or invalid first message / sequence');
-        skipped += 1;
         continue;
       }
       const apiErr = failedSends && failedSends[c.phoneNormalized];
@@ -576,12 +445,11 @@ async function runCampaignWorker(campaignId, opts = {}) {
     }
 
     campLog.info(
-      { event: 'campaign_batch_done', batchNum, sent, failed, skipped, batchSize: contacts.length },
+      { event: 'campaign_batch_done', batchNum, sent, failed, batchSize: contacts.length },
       `batch ${batchNum} done`,
     );
     await incrementSentCount(campaignId, sent);
     await incrementFailedCount(campaignId, failed);
-    await incrementSkippedCount(campaignId, skipped);
 
     const afterBatch = await getCampaignById(campaignId);
     if (!afterBatch) return;

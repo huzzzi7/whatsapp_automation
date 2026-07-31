@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
@@ -8,7 +8,6 @@ import AdminRoute from './components/AdminRoute';
 import CreateUserPage from './pages/CreateUserPage';
 import CampaignWizardPage from './pages/CampaignWizardPage';
 import CampaignDetailsPage from './pages/CampaignDetailsPage';
-import WarmupPage from './pages/WarmupPage';
 
 export default function App() {
   return (
@@ -25,17 +24,8 @@ export default function App() {
               </AdminRoute>
             )}
           />
-          <Route path="send" element={<Navigate to="/campaign" replace />} />
           <Route path="campaign" element={<CampaignWizardPage />} />
           <Route path="campaign-details" element={<CampaignDetailsPage />} />
-          <Route
-            path="warmup"
-            element={
-              <AdminRoute>
-                <WarmupPage />
-              </AdminRoute>
-            }
-          />
           <Route
             path="create-user"
             element={

@@ -10,11 +10,12 @@ const { buildComponentsForTemplate } = require('../metaTemplateBuilder');
 /**
  * @param {Array<{phone: string, [key: string]: any}>} users
  * @param {{ metaConfig: {phoneNumberId:string, accessToken:string, graphVersion:string}, metaTemplate: {name:string, languageCode:string, variables:string[]} }} ctx
- * @returns {Promise<{ sentPhoneDigits: string[], failedSends: Record<string,string> }>}
+ * @returns {Promise<{ sentPhoneDigits: string[], failedSends: Record<string,string>, sentMessageIds: Record<string,string> }>}
  */
 async function sendMetaTemplateBatch(users, { metaConfig, metaTemplate }) {
   const sentPhoneDigits = [];
   const failedSends = {};
+  const sentMessageIds = {};
 
   for (const user of users) {
     const phone = String(user.phone || '');
@@ -25,7 +26,7 @@ async function sendMetaTemplateBatch(users, { metaConfig, metaTemplate }) {
     }
     try {
       // eslint-disable-next-line no-await-in-loop
-      await metaWhatsApp.sendTemplate({
+      const res = await metaWhatsApp.sendTemplate({
         to: toMetaRecipient(phone),
         phoneNumberId: metaConfig.phoneNumberId,
         accessToken: metaConfig.accessToken,
@@ -35,12 +36,14 @@ async function sendMetaTemplateBatch(users, { metaConfig, metaTemplate }) {
         graphVersion: metaConfig.graphVersion || undefined,
       });
       sentPhoneDigits.push(phone);
+      const wamid = res?.messages?.[0]?.id;
+      if (wamid) sentMessageIds[phone] = wamid;
     } catch (err) {
       failedSends[phone] = err?.message || 'Meta send failed';
     }
   }
 
-  return { sentPhoneDigits, failedSends };
+  return { sentPhoneDigits, failedSends, sentMessageIds };
 }
 
 module.exports = { sendMetaTemplateBatch };

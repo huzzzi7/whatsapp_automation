@@ -7,21 +7,15 @@ const appConfig = require('../../config');
 
 const BATCH_INSERT_SIZE = 500;
 
-/** Campaign row + optional green_instances display fields (LEFT JOIN). */
-const CAMPAIGN_SELECT_JOIN = `SELECT c.*, gi.name AS instance_name, gi.phoneNumber AS instance_phone
-FROM campaigns c
-LEFT JOIN green_instances gi ON gi.id = c.green_instance_id`;
+const CAMPAIGN_SELECT = `SELECT c.* FROM campaigns c`;
 
 function toIsoDateStr(val) {
   if (val == null) return null;
-  // Already a YYYY-MM-DD string
   if (typeof val === 'string') {
     const s = val.trim().slice(0, 10);
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
   }
-  // mysql2 returns DATE columns as JS Date objects
   if (val instanceof Date && !isNaN(val.getTime())) {
-    // Use UTC to avoid timezone shift (DATE has no time component)
     const y = val.getUTCFullYear();
     const m = String(val.getUTCMonth() + 1).padStart(2, '0');
     const d = String(val.getUTCDate()).padStart(2, '0');
@@ -34,10 +28,7 @@ function mapCampaignRow(row) {
   if (!row) return null;
   return {
     id: row.id,
-    greenInstanceId: row.green_instance_id,
-    greenInstanceName: row.instance_name != null ? String(row.instance_name) : null,
-    greenInstancePhone: row.instance_phone != null ? String(row.instance_phone) : null,
-    provider: row.provider || 'green',
+    provider: row.provider || 'meta',
     metaTemplateId: row.meta_template_id ?? null,
     name: row.name,
     status: row.status,
@@ -64,18 +55,11 @@ function mapCampaignRow(row) {
     campaignStartDate: toIsoDateStr(row.campaign_start_date),
     campaignEndDate: toIsoDateStr(row.campaign_end_date),
     dailyLimitPerInstance: row.daily_limit_per_instance ?? null,
-    isMultiInstance:
-      row.is_multi_instance != null ? Boolean(Number(row.is_multi_instance)) : false,
   };
 }
 
-/**
- * @param {{ id: string, greenInstanceId: string, name?: string|null, batchSize: number, totalContacts: number, queueOrder: number, scheduledAt?: Date|string|null }} params
- */
 async function createCampaign({
   id,
-  greenInstanceId,
-  provider = 'green',
   metaTemplateId = null,
   name = null,
   batchSize,
@@ -88,7 +72,6 @@ async function createCampaign({
   campaignStartDate = null,
   campaignEndDate = null,
   dailyLimitPerInstance = null,
-  isMultiInstance = false,
 }) {
   let sched = null;
   if (scheduledAt != null) {
@@ -120,22 +103,18 @@ async function createCampaign({
     dailyLimitPerInstance != null && Number.isFinite(Number(dailyLimitPerInstance))
       ? Math.max(1, Math.floor(Number(dailyLimitPerInstance)))
       : null;
-  const multi = isMultiInstance ? 1 : 0;
-  const providerValue = provider === 'meta' ? 'meta' : 'green';
   const metaTemplateIdValue =
     metaTemplateId != null && Number.isFinite(Number(metaTemplateId)) ? Number(metaTemplateId) : null;
 
   await pool.execute(
     `INSERT INTO campaigns (
-      id, green_instance_id, provider, meta_template_id, name, status, queue_order, total_contacts,
+      id, provider, meta_template_id, name, status, queue_order, total_contacts,
       batch_size, scheduled_at,
       operational_start, operational_end, operational_days, campaign_start_date, campaign_end_date,
-      daily_limit_per_instance, is_multi_instance
-    ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      daily_limit_per_instance
+    ) VALUES (?, 'meta', ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
-      greenInstanceId,
-      providerValue,
       metaTemplateIdValue,
       name == null || name === '' ? null : String(name).slice(0, 255),
       queueOrder,
@@ -148,29 +127,18 @@ async function createCampaign({
       startDate,
       endDate,
       dailyLimit,
-      multi,
     ],
   );
   const [rows] = await pool.execute('SELECT * FROM campaigns WHERE id = ? LIMIT 1', [id]);
   return mapCampaignRow(rows[0]);
 }
 
-/**
- * Next queue_order for new campaigns (global FIFO).
- */
 async function getNextQueueOrder() {
   const [rows] = await pool.execute('SELECT COALESCE(MAX(queue_order), 0) AS n FROM campaigns');
   const n = rows[0]?.n;
   return (Number(n) || 0) + 1;
 }
 
-/**
- * @param {string} campaignId
- * @param {Array<object>} users - raw user objects from API (phone, university, sequence, …)
- */
-/**
- * @returns {Promise<number>} number of rows inserted
- */
 async function insertCampaignContacts(campaignId, users) {
   const list = Array.isArray(users) ? users : [];
   const rows = [];
@@ -221,23 +189,6 @@ async function getNextQueuedCampaign() {
   return mapCampaignRow(rows[0]);
 }
 
-/**
- * MySQL ER_UPDATE_TABLE_USED (1093) workaround: derived table so UPDATE campaigns is not combined
- * with a direct subquery selecting from campaigns in the same statement.
- */
-const NOT_RUNNING_ON_INSTANCE_SQL = `NOT EXISTS (
-  SELECT 1 FROM (
-    SELECT green_instance_id
-    FROM campaigns
-    WHERE status = 'running'
-  ) AS r
-  WHERE r.green_instance_id = c.green_instance_id
-)`;
-
-/**
- * Atomically promote queued → running only if still queued, due in DB (UTC), and no other running campaign on same instance.
- * @returns {Promise<number>} affectedRows (1 if this worker claimed the campaign)
- */
 async function promoteQueuedCampaignToRunningIfDue(campaignId) {
   console.log('[CampaignRepository] Attempting to promote queued campaign:', campaignId);
   const [result] = await pool.execute(
@@ -245,83 +196,52 @@ async function promoteQueuedCampaignToRunningIfDue(campaignId) {
      SET c.status = 'running', c.error_message = NULL, c.started_at = COALESCE(c.started_at, CURRENT_TIMESTAMP), c.updated_at = CURRENT_TIMESTAMP
      WHERE c.id = ?
        AND c.status = 'queued'
-       AND (c.scheduled_at IS NULL OR c.scheduled_at <= UTC_TIMESTAMP())
-       AND ${NOT_RUNNING_ON_INSTANCE_SQL}`,
+       AND (c.scheduled_at IS NULL OR c.scheduled_at <= UTC_TIMESTAMP())`,
     [campaignId],
   );
   return Number(result.affectedRows) || 0;
 }
 
-/** @returns {Promise<object[]>} all running campaigns, oldest started first */
 async function getRunningCampaigns() {
   const [rows] = await pool.execute(
-    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'running' ORDER BY c.started_at ASC`,
+    `${CAMPAIGN_SELECT} WHERE c.status = 'running' ORDER BY c.started_at ASC`,
   );
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
 
-/**
- * @param {string} greenInstanceId - green_instances.id (DB)
- * @returns {Promise<object|null>}
- */
-async function getRunningCampaignByInstance(greenInstanceId) {
-  const gid = String(greenInstanceId || '').trim();
-  if (!gid) return null;
-  const [rows] = await pool.execute(
-    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'running' AND c.green_instance_id = ? ORDER BY c.started_at ASC LIMIT 1`,
-    [gid],
-  );
-  return mapCampaignRow(rows[0]);
-}
-
-/** @deprecated Prefer getRunningCampaigns — returns first running row for backward compatibility */
 async function getRunningCampaign() {
   const list = await getRunningCampaigns();
   return list[0] || null;
 }
 
-/**
- * Queued campaigns whose schedule is due, global FIFO order.
- * @returns {Promise<object[]>}
- */
 async function getQueuedCampaignsDueOrdered() {
   const [rows] = await pool.execute(
-    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'queued'
+    `${CAMPAIGN_SELECT} WHERE c.status = 'queued'
      AND (c.scheduled_at IS NULL OR c.scheduled_at <= UTC_TIMESTAMP())
      ORDER BY c.queue_order ASC, c.created_at ASC`,
   );
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
 
-/**
- * Manual start: queued → running if instance has no running campaign (atomic).
- * @returns {Promise<number>} affectedRows
- */
-async function claimQueuedAsRunningIfInstanceFree(campaignId) {
+async function claimQueuedAsRunning(campaignId) {
   console.log('[CampaignRepository] Attempting to claim queued campaign:', campaignId);
   const [result] = await pool.execute(
     `UPDATE campaigns c
      SET c.status = 'running', c.error_message = NULL, c.started_at = COALESCE(c.started_at, CURRENT_TIMESTAMP), c.updated_at = CURRENT_TIMESTAMP
      WHERE c.id = ?
-       AND c.status = 'queued'
-       AND ${NOT_RUNNING_ON_INSTANCE_SQL}`,
+       AND c.status = 'queued'`,
     [campaignId],
   );
   return Number(result.affectedRows) || 0;
 }
 
-/**
- * Resume: paused → running if instance has no other running campaign (atomic).
- * @returns {Promise<number>} affectedRows
- */
-async function claimPausedAsRunningIfInstanceFree(campaignId) {
+async function claimPausedAsRunning(campaignId) {
   console.log('[CampaignRepository] Attempting to claim paused campaign:', campaignId);
   const [result] = await pool.execute(
     `UPDATE campaigns c
      SET c.status = 'running', c.error_message = NULL, c.updated_at = CURRENT_TIMESTAMP
      WHERE c.id = ?
-       AND c.status = 'paused'
-       AND ${NOT_RUNNING_ON_INSTANCE_SQL}`,
+       AND c.status = 'paused'`,
     [campaignId],
   );
   return Number(result.affectedRows) || 0;
@@ -329,24 +249,20 @@ async function claimPausedAsRunningIfInstanceFree(campaignId) {
 
 async function getPausedCampaigns() {
   const [rows] = await pool.execute(
-    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'paused' ORDER BY c.updated_at DESC`,
+    `${CAMPAIGN_SELECT} WHERE c.status = 'paused' ORDER BY c.updated_at DESC`,
   );
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
 
 async function getQueuedCampaigns() {
   const [rows] = await pool.execute(
-    `${CAMPAIGN_SELECT_JOIN} WHERE c.status = 'queued' ORDER BY c.queue_order ASC, c.created_at ASC`,
+    `${CAMPAIGN_SELECT} WHERE c.status = 'queued' ORDER BY c.queue_order ASC, c.created_at ASC`,
   );
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
 
 const LISTABLE_STATUSES = new Set(['queued', 'running', 'paused', 'completed', 'failed', 'cancelled', 'stopped']);
 
-/**
- * @param {{ statuses?: string[] }} [opts] - if empty/omitted, all campaigns
- * @returns {Promise<object[]>} mapped campaign rows
- */
 async function listCampaigns(opts = {}) {
   const { statuses } = opts;
   if (statuses && Array.isArray(statuses) && statuses.length > 0) {
@@ -356,22 +272,20 @@ async function listCampaigns(opts = {}) {
     }
     const ph = safe.map(() => '?').join(', ');
     const [rows] = await pool.execute(
-      `${CAMPAIGN_SELECT_JOIN} WHERE c.status IN (${ph}) ORDER BY c.created_at DESC`,
+      `${CAMPAIGN_SELECT} WHERE c.status IN (${ph}) ORDER BY c.created_at DESC`,
       safe,
     );
     return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
   }
-  const [rows] = await pool.execute(`${CAMPAIGN_SELECT_JOIN} ORDER BY c.created_at DESC`);
+  const [rows] = await pool.execute(`${CAMPAIGN_SELECT} ORDER BY c.created_at DESC`);
   return rows.map((r) => mapCampaignRow(r)).filter(Boolean);
 }
 
-/**
- * Last N contacts by primary key (recent rows) for debugging / detail view.
- */
 async function getCampaignContactsSample(campaignId, limit = 20) {
   const lim = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 1)));
   const [rows] = await pool.execute(
-    `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count
+    `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count,
+            meta_message_id, meta_delivery_status, meta_delivery_error, meta_delivery_updated_at
      FROM campaign_contacts
      WHERE campaign_id = ?
      ORDER BY id DESC
@@ -389,18 +303,13 @@ async function countCampaignContacts(campaignId) {
   return Number(row?.cnt) || 0;
 }
 
-/**
- * Paginated contacts in send order (sort_order, id).
- * @param {string} campaignId
- * @param {number} page - 1-based
- * @param {number} limit - clamped 1..200
- */
 async function listCampaignContactsPage(campaignId, page, limit) {
   const lim = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
   const pg = Math.max(1, Math.floor(Number(page) || 1));
   const offset = (pg - 1) * lim;
   const [rows] = await pool.execute(
-    `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count
+    `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count,
+            meta_message_id, meta_delivery_status, meta_delivery_error, meta_delivery_updated_at
      FROM campaign_contacts
      WHERE campaign_id = ?
      ORDER BY sort_order ASC, id ASC
@@ -410,33 +319,6 @@ async function listCampaignContactsPage(campaignId, page, limit) {
   return rows;
 }
 
-async function updateContactInstanceAssignment(contactId, instanceId) {
-  const iid = instanceId != null && String(instanceId).trim() !== '' ? String(instanceId).trim() : null;
-  await pool.execute(`UPDATE campaign_contacts SET assigned_instance_id = ? WHERE id = ?`, [
-    iid,
-    Number(contactId),
-  ]);
-}
-
-async function getContactsByInstance(campaignId, instanceId, status = 'pending') {
-  const gid = String(campaignId || '').trim();
-  const iid = String(instanceId || '').trim();
-  const st = String(status || 'pending').trim().toLowerCase();
-  const [rows] = await pool.execute(
-    `SELECT *
-     FROM campaign_contacts
-     WHERE campaign_id = ? AND assigned_instance_id = ? AND first_send_status = ?
-     ORDER BY sort_order ASC`,
-    [gid, iid, st],
-  );
-  return rows;
-}
-
-/**
- * @param {string} campaignId
- * @param {string} status - queued | running | paused | completed | failed | cancelled | stopped
- * @param {{ errorMessage?: string }} [opts]
- */
 async function updateCampaignStatus(campaignId, status, opts = {}) {
   const err = opts.errorMessage != null ? String(opts.errorMessage).slice(0, 65535) : null;
 
@@ -448,11 +330,6 @@ async function updateCampaignStatus(campaignId, status, opts = {}) {
   } else if (status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'stopped') {
     await pool.execute(
       `UPDATE campaigns SET status = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [status, err, campaignId],
-    );
-  } else if (status === 'paused' || status === 'queued') {
-    await pool.execute(
-      `UPDATE campaigns SET status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
       [status, err, campaignId],
     );
   } else {
@@ -490,7 +367,6 @@ async function incrementSkippedCount(campaignId, count) {
   );
 }
 
-/** Global pending count for a campaign (all instances). */
 async function countPendingContacts(campaignId) {
   const cid = String(campaignId || '').trim();
   if (!cid) return 0;
@@ -501,7 +377,6 @@ async function countPendingContacts(campaignId) {
   return Number(rows[0]?.cnt) || 0;
 }
 
-/** Contacts with delivery_confirmed = 1 (column may be absent on old DB — returns 0). */
 async function countDeliveredContacts(campaignId) {
   const cid = String(campaignId || '').trim();
   if (!cid) return 0;
@@ -516,10 +391,6 @@ async function countDeliveredContacts(campaignId) {
   }
 }
 
-/**
- * @param {string[]} campaignIds
- * @returns {Promise<Map<string, { pending: number, delivered: number }>>}
- */
 async function getPendingDeliveredCountsByCampaignIds(campaignIds) {
   const map = new Map();
   const list = [...new Set((campaignIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
@@ -552,120 +423,16 @@ async function getPendingDeliveredCountsByCampaignIds(campaignIds) {
   return map;
 }
 
-/** Map green_instances row to API instance detail shape. */
-function mapGreenInstanceDetailRow(row) {
-  if (!row) return null;
-  const id = row.id != null ? String(row.id) : row.instanceId != null ? String(row.instanceId) : '';
-  if (!id) return null;
-  return {
-    id,
-    name: row.name != null ? String(row.name) : '',
-    phoneNumber: row.phoneNumber != null ? String(row.phoneNumber) : null,
-    isActive: Number(row.isActive) === 1,
-    authStatus: row.authStatus != null ? String(row.authStatus) : null,
-  };
-}
-
-/**
- * Distinct green instances that appear on campaign_contacts for this campaign (assigned sends).
- * @param {string} campaignId
- * @returns {Promise<Array<{ id: string, name: string, phoneNumber: string|null, isActive: boolean, authStatus: string|null }>>}
- */
-async function getCampaignInstanceNames(campaignId) {
-  const cid = String(campaignId || '').trim();
-  if (!cid) return [];
-  const [rows] = await pool.execute(
-    `SELECT DISTINCT gi.id, gi.name, gi.phoneNumber, gi.isActive, gi.authStatus
-     FROM campaign_contacts cc
-     INNER JOIN green_instances gi ON gi.id = cc.assigned_instance_id
-     WHERE cc.campaign_id = ?
-       AND cc.assigned_instance_id IS NOT NULL`,
-    [cid],
-  );
-  const out = (rows || []).map((r) => mapGreenInstanceDetailRow(r)).filter(Boolean);
-  out.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }));
-  return out;
-}
-
-/**
- * @param {string[]} campaignIds
- * @returns {Promise<Map<string, Array<{ id: string, name: string, phoneNumber: string|null, isActive: boolean, authStatus: string|null }>>>}
- */
-async function getCampaignInstanceNamesForCampaignIds(campaignIds) {
-  const map = new Map();
-  const list = [...new Set((campaignIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
-  for (const id of list) map.set(id, []);
-  if (!list.length) return map;
-  const ph = list.map(() => '?').join(',');
-  const [rows] = await pool.execute(
-    `SELECT DISTINCT cc.campaign_id AS campaignId,
-            gi.id AS instanceId,
-            gi.name,
-            gi.phoneNumber,
-            gi.isActive,
-            gi.authStatus
-     FROM campaign_contacts cc
-     INNER JOIN green_instances gi ON gi.id = cc.assigned_instance_id
-     WHERE cc.campaign_id IN (${ph})
-       AND cc.assigned_instance_id IS NOT NULL`,
-    list,
-  );
-  for (const r of rows || []) {
-    const cid = String(r.campaignId || '').trim();
-    const inst = mapGreenInstanceDetailRow({
-      id: r.instanceId,
-      name: r.name,
-      phoneNumber: r.phoneNumber,
-      isActive: r.isActive,
-      authStatus: r.authStatus,
-    });
-    if (!inst || !map.has(cid)) continue;
-    const arr = map.get(cid);
-    if (!arr.some((x) => x.id === inst.id)) arr.push(inst);
-  }
-  for (const arr of map.values()) {
-    arr.sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }));
-  }
-  return map;
-}
-
-/** For campaign worker auth gate: current instance row flags. */
-async function getGreenInstanceById(greenInstanceDbId) {
-  const id = String(greenInstanceDbId || '').trim();
-  if (!id) return null;
-  const [rows] = await pool.execute(
-    `SELECT id, isActive, manualDisabled FROM green_instances WHERE id = ? LIMIT 1`,
-    [id],
-  );
-  const r = rows[0];
-  if (!r) return null;
-  return {
-    id: String(r.id),
-    isActive: Number(r.isActive) === 1,
-    manualDisabled: Number(r.manualDisabled) === 1,
-  };
-}
-
-async function getPendingContacts(campaignId, limit, instanceId) {
+async function getPendingContacts(campaignId, limit) {
   const lim = Math.max(1, Math.min(10000, Math.floor(Number(limit) || 1)));
-  const iid = instanceId != null && String(instanceId).trim() !== '' ? String(instanceId).trim() : null;
-  const [rows] = iid
-    ? await pool.execute(
-        `SELECT id, campaign_id, phone_normalized, payload_json, sort_order, first_send_status, attempt_count, last_error, sent_at
-         FROM campaign_contacts
-         WHERE campaign_id = ? AND assigned_instance_id = ? AND first_send_status = 'pending'
-         ORDER BY sort_order ASC
-         LIMIT ${lim}`,
-        [campaignId, iid],
-      )
-    : await pool.execute(
-        `SELECT id, campaign_id, phone_normalized, payload_json, sort_order, first_send_status, attempt_count, last_error, sent_at
-         FROM campaign_contacts
-         WHERE campaign_id = ? AND first_send_status = 'pending'
-         ORDER BY sort_order ASC
-         LIMIT ${lim}`,
-        [campaignId],
-      );
+  const [rows] = await pool.execute(
+    `SELECT id, campaign_id, phone_normalized, payload_json, sort_order, first_send_status, attempt_count, last_error, sent_at
+     FROM campaign_contacts
+     WHERE campaign_id = ? AND first_send_status = 'pending'
+     ORDER BY sort_order ASC
+     LIMIT ${lim}`,
+    [campaignId],
+  );
   return rows.map((row) => ({
     id: row.id,
     campaignId: row.campaign_id,
@@ -679,80 +446,57 @@ async function getPendingContacts(campaignId, limit, instanceId) {
   }));
 }
 
-async function getDailyContactsSentCount(campaignId, instanceId, date) {
+async function getDailyContactsSentCount(campaignId, date) {
   const cid = String(campaignId || '').trim();
-  const iid = String(instanceId || '').trim();
   const day = String(date || '').trim().slice(0, 10);
-  if (!cid || !iid || !day) return 0;
-  // Conservative window around the intended local day. The worker passes `day` as YYYY-MM-DD
-  // for CAMPAIGN_TIMEZONE (Europe/London by default). We query a wider UTC range to avoid
-  // DB timezone dependence and to be DST-safe; over-counting near boundaries is safer for caps.
+  if (!cid || !day) return 0;
   const dayStartUtc = new Date(`${day}T00:00:00Z`);
   if (Number.isNaN(dayStartUtc.getTime())) return 0;
-  const rangeStart = new Date(dayStartUtc.getTime() - 2 * 60 * 60 * 1000); // -2h buffer
-  const rangeEnd = new Date(dayStartUtc.getTime() + 25 * 60 * 60 * 1000); // +25h buffer (27h total)
+  const rangeStart = new Date(dayStartUtc.getTime() - 2 * 60 * 60 * 1000);
+  const rangeEnd = new Date(dayStartUtc.getTime() + 25 * 60 * 60 * 1000);
   const fmtUtc = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
   const [[row]] = await pool.execute(
     `SELECT COUNT(*) AS cnt
      FROM campaign_contacts
      WHERE campaign_id = ?
-       AND assigned_instance_id = ?
        AND first_send_status = 'sent'
        AND sent_at >= ?
        AND sent_at < ?`,
-    [cid, iid, fmtUtc(rangeStart), fmtUtc(rangeEnd)],
+    [cid, fmtUtc(rangeStart), fmtUtc(rangeEnd)],
   );
   return Number(row?.cnt) || 0;
 }
 
-async function getActiveCampaignsDailyLoad(excludeCampaignId, instanceId) {
-  // Returns total dailyLimitPerInstance already committed by OTHER active/queued campaigns
-  // that share this instance (directly or via assigned_instance_id in contacts).
-  const eid = String(excludeCampaignId || '').trim();
-  const iid = String(instanceId || '').trim();
-  if (!iid) return 0;
-  const [rows] = await pool.execute(
-    `SELECT COALESCE(SUM(daily_limit_per_instance), 0) AS total
-     FROM campaigns
-     WHERE status IN ('queued', 'running', 'paused')
-       AND id != ?
-       AND (
-         green_instance_id = ?
-         OR id IN (
-           SELECT DISTINCT campaign_id FROM campaign_contacts WHERE assigned_instance_id = ?
-         )
-       )
-       AND daily_limit_per_instance IS NOT NULL`,
-    [eid, iid, iid],
-  );
-  return Number(rows[0]?.total) || 0;
-}
-
-async function markContactSent(contactId) {
+async function markContactSent(contactId, metaMessageId) {
+  if (metaMessageId) {
+    await pool.execute(
+      `UPDATE campaign_contacts SET first_send_status = 'sent', sent_at = CURRENT_TIMESTAMP, meta_message_id = ? WHERE id = ?`,
+      [String(metaMessageId), contactId],
+    );
+    return;
+  }
   await pool.execute(
     `UPDATE campaign_contacts SET first_send_status = 'sent', sent_at = CURRENT_TIMESTAMP WHERE id = ?`,
     [contactId],
   );
 }
 
-/**
- * Called by messageWorker after Green API confirms actual delivery.
- * Updates delivered_at timestamp and sets delivery_confirmed = 1.
- * This is separate from markContactSent (which fires at enqueue time).
- */
-async function markContactDelivered(contactId) {
-  try {
-    await pool.execute(
-      `UPDATE campaign_contacts 
-       SET delivered_at = NOW(), delivery_confirmed = 1 
-       WHERE id = ? AND first_send_status = 'sent'`,
-      [Number(contactId)],
-    );
-  } catch (err) {
-    // Non-fatal: column may not exist yet; worker should not crash on this
-    const log = require('../utils/logger').createLogger('worker');
-    log.warn({ err: err.message, contactId, event: 'mark_delivered_failed' }, 'markContactDelivered failed (non-fatal)');
-  }
+const META_STATUS_RANK = { sent: 1, delivered: 2, read: 3, failed: 4 };
+
+async function updateContactMetaDeliveryStatus(messageId, status, errorDetail) {
+  const rank = META_STATUS_RANK[status];
+  if (!rank) return 0;
+  const [result] = await pool.execute(
+    `UPDATE campaign_contacts
+     SET meta_delivery_status = ?, meta_delivery_error = ?, meta_delivery_updated_at = CURRENT_TIMESTAMP
+     WHERE meta_message_id = ?
+       AND COALESCE(
+         CASE meta_delivery_status WHEN 'sent' THEN 1 WHEN 'delivered' THEN 2 WHEN 'read' THEN 3 WHEN 'failed' THEN 4 END,
+         0
+       ) <= ?`,
+    [status, errorDetail != null ? String(errorDetail).slice(0, 65535) : null, String(messageId), rank],
+  );
+  return Number(result.affectedRows) || 0;
 }
 
 async function markContactFailed(contactId, lastError) {
@@ -772,16 +516,10 @@ async function markContactSkipped(contactId, reason) {
 }
 
 async function getCampaignById(campaignId) {
-  const [rows] = await pool.execute(`${CAMPAIGN_SELECT_JOIN} WHERE c.id = ? LIMIT 1`, [campaignId]);
+  const [rows] = await pool.execute(`${CAMPAIGN_SELECT} WHERE c.id = ? LIMIT 1`, [campaignId]);
   return mapCampaignRow(rows[0]);
 }
 
-/**
- * Update schedule fields on a paused campaign.
- * @param {string} campaignId
- * @param {{ operationalStart: string, operationalEnd: string, operationalDays: string, campaignStartDate: string, campaignEndDate: string, dailyLimitPerInstance?: number|null }} schedule
- * @returns {Promise<number>} affected rows
- */
 async function updateCampaignSchedule(campaignId, schedule) {
   const opStart = String(schedule.operationalStart || '').trim().slice(0, 8);
   const opEnd = String(schedule.operationalEnd || '').trim().slice(0, 8);
@@ -808,74 +546,23 @@ async function updateCampaignSchedule(campaignId, schedule) {
   return Number(result.affectedRows) || 0;
 }
 
-/**
- * @param {string} id - campaigns.id (UUID)
- * @returns {Promise<number>} affected rows (0 if none)
- */
 async function deleteCampaignById(id) {
   const [result] = await pool.execute('DELETE FROM campaigns WHERE id = ?', [id]);
   return Number(result.affectedRows) || 0;
-}
-
-/**
- * Latest campaign contact row for this Green instance + phone (optional campaign scope).
- * @param {string} greenInstanceDbId - green_instances.id
- * @param {string} phoneNormalized
- * @param {string|null|undefined} campaignId - when set, restricts to this campaign
- * @returns {Promise<{ university?: string, city?: string, group?: string, link?: string, raw: object }|null>}
- */
-async function getContactPayloadByPhone(greenInstanceDbId, phoneNormalized, campaignId) {
-  const gid = String(greenInstanceDbId || '').trim();
-  const phone = String(phoneNormalized || '').trim();
-  if (!gid || !phone) return null;
-  const cid = campaignId != null && String(campaignId).trim() !== '' ? String(campaignId).trim() : null;
-  try {
-    const [rows] = await pool.execute(
-      `SELECT cc.payload_json
-       FROM campaign_contacts cc
-       INNER JOIN campaigns c ON c.id = cc.campaign_id
-       WHERE c.green_instance_id = ?
-         AND cc.phone_normalized = ?
-         AND (? IS NULL OR cc.campaign_id = ?)
-       LIMIT 1`,
-      [gid, phone, cid, cid],
-    );
-    const rawCell = rows[0]?.payload_json;
-    if (rawCell == null || String(rawCell).trim() === '') return null;
-    let p;
-    try {
-      p = typeof rawCell === 'string' ? JSON.parse(rawCell) : rawCell;
-    } catch {
-      return null;
-    }
-    if (!p || typeof p !== 'object') return null;
-    return {
-      university: p.university != null ? String(p.university) : undefined,
-      city: p.city != null ? String(p.city) : undefined,
-      group: p.group != null ? String(p.group) : undefined,
-      link: p.link != null ? String(p.link) : undefined,
-      raw: p,
-    };
-  } catch {
-    return null;
-  }
 }
 
 module.exports = {
   createCampaign,
   getNextQueueOrder,
   insertCampaignContacts,
-  updateContactInstanceAssignment,
-  getContactsByInstance,
   setTotalContacts,
   getNextQueuedCampaign,
   promoteQueuedCampaignToRunningIfDue,
   getRunningCampaign,
   getRunningCampaigns,
-  getRunningCampaignByInstance,
   getQueuedCampaignsDueOrdered,
-  claimQueuedAsRunningIfInstanceFree,
-  claimPausedAsRunningIfInstanceFree,
+  claimQueuedAsRunning,
+  claimPausedAsRunning,
   getPausedCampaigns,
   getQueuedCampaigns,
   listCampaigns,
@@ -886,21 +573,16 @@ module.exports = {
   incrementSkippedCount,
   getPendingContacts,
   getDailyContactsSentCount,
-  getActiveCampaignsDailyLoad,
   markContactSent,
-  markContactDelivered,
   markContactFailed,
   markContactSkipped,
+  updateContactMetaDeliveryStatus,
   getCampaignById,
   updateCampaignSchedule,
   countPendingContacts,
   countDeliveredContacts,
   getPendingDeliveredCountsByCampaignIds,
-  getGreenInstanceById,
-  getCampaignInstanceNames,
-  getCampaignInstanceNamesForCampaignIds,
   countCampaignContacts,
   listCampaignContactsPage,
   deleteCampaignById,
-  getContactPayloadByPhone,
 };

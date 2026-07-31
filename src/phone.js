@@ -1,6 +1,5 @@
 /**
- * Phone normalization and GreenAPI chatId formatting.
- * Ensures digits-only numbers and correct @c.us suffix for GreenAPI.
+ * Phone normalization and Meta recipient formatting.
  */
 
 /**
@@ -161,16 +160,6 @@ function normalizePhone(raw, defaultCountryCode = '44') {
 }
 
 /**
- * Format normalized phone for GreenAPI chatId (e.g. "447123456789" -> "447123456789@c.us").
- * @param {string} phone - Normalized digits-only phone
- * @returns {string} chatId for GreenAPI sendMessage
- */
-function toChatId(phone) {
-  const p = String(phone || '').trim();
-  return p ? `${p}@c.us` : '';
-}
-
-/**
  * Format normalized digits for Meta Cloud API `to` field (digits only, no +, no @c.us).
  * @param {string} digits - Normalized phone (may include non-digits; stripped)
  * @returns {string}
@@ -179,4 +168,4 @@ function toMetaRecipient(digits) {
   return String(digits || '').replace(/\D/g, '');
 }
 
-module.exports = { normalizePhone, toChatId, toMetaRecipient };
+module.exports = { normalizePhone, toMetaRecipient };

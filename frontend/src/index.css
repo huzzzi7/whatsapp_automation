@@ -692,59 +692,6 @@ html[data-theme='light'] .alert-error {
   margin-top: 4px;
 }
 
-/* Green instance modal (Settings) */
-.green-instance-modal {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0;
-  max-width: min(480px, 92vw);
-  width: 100%;
-  max-height: min(90vh, 640px);
-  background: var(--surface);
-  color: var(--text-primary);
-  box-shadow: var(--shadow);
-}
-
-.green-instance-modal::backdrop {
-  background: rgba(0, 0, 0, 0.55);
-}
-
-.green-instance-modal__inner {
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: min(90vh, 640px);
-  overflow-y: auto;
-  box-sizing: border-box;
-}
-
-.green-instance-modal__title {
-  margin: 0 0 4px 0 !important;
-  font-size: 1.25rem;
-}
-
-.green-instance-modal__hint {
-  margin: 0;
-  font-size: 0.8125rem;
-  color: var(--text-muted);
-}
-
-.green-instance-modal__code {
-  font-size: 0.75rem;
-  word-break: break-all;
-}
-
-.green-instance-modal__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  margin-top: 4px;
-}
-
 /* Instance dropdown (Send page) */
 .instance-select-row {
   margin-bottom: 12px;
@@ -1674,6 +1621,16 @@ html[data-theme='dark'] .campaign-details__badge--paused {
 
 html[data-theme='dark'] .campaign-users-modal__badge--skipped {
   color: #fbbf24;
+}
+
+.campaign-users-modal__badge--delivered {
+  background: rgba(99, 102, 241, 0.16);
+  color: var(--primary);
+}
+
+.campaign-users-modal__badge--read {
+  background: rgba(99, 102, 241, 0.28);
+  color: var(--primary);
 }
 
 .campaign-users-modal__badge--muted {

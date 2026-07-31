@@ -140,21 +140,13 @@ export async function createCampaignContact(payload) {
 export async function startCampaign(users, options = {}) {
   const body = {
     users,
+    provider: 'meta',
+    metaTemplateId: options?.metaTemplateId,
     name: options?.name,
-    batchSize: options?.batchSize,
-    operationalStart: options?.operationalStart,
-    operationalEnd: options?.operationalEnd,
-    operationalDays: options?.operationalDays,
     campaignStartDate: options?.campaignStartDate,
     campaignEndDate: options?.campaignEndDate,
     ...(options?.scheduledAt != null && String(options.scheduledAt).trim() !== '' ? { scheduledAt: options.scheduledAt } : {}),
   };
-  if (options?.provider === 'meta') {
-    body.provider = 'meta';
-    body.metaTemplateId = options?.metaTemplateId;
-  }
-  const gid = options?.greenInstanceId != null ? String(options.greenInstanceId).trim() : '';
-  if (gid) body.greenInstanceId = gid;
   return apiFetch('/api/campaign/start', {
     method: 'POST',
     body: JSON.stringify(body),
@@ -213,82 +205,6 @@ export async function stopCampaign(id) {
 
 export async function deleteCampaign(id) {
   return apiFetch(`/api/campaigns/${encodeURIComponent(id)}`, { method: 'DELETE' });
-}
-
-/**
- * Start reply-driven test: send message 1 only, store sequence in state (same as production campaign start).
- * Further messages are sent when the user replies (webhook → onIncomingReply).
- * @param {{ greenInstanceId: string; phone: string; sequence: string[] }} payload
- * @returns {Promise<{ ok: true; started: boolean }>}
- */
-export async function sendTestStart(payload) {
-  return apiFetch('/api/campaign/test-start', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function listGreenInstances() {
-  const data = await apiFetch('/api/instances', { method: 'GET' });
-  return data.instances ?? [];
-}
-
-export async function getCampaignPreview(params) {
-  const qs = new URLSearchParams();
-  if (params.totalContacts != null) qs.set('totalContacts', String(params.totalContacts));
-  if (params.instanceMode) qs.set('instanceMode', params.instanceMode);
-  if (params.greenInstanceId) qs.set('greenInstanceId', params.greenInstanceId);
-  if (params.operationalStart) qs.set('operationalStart', params.operationalStart);
-  if (params.operationalEnd) qs.set('operationalEnd', params.operationalEnd);
-  if (params.operationalDays) qs.set('operationalDays', params.operationalDays);
-  if (params.campaignStartDate) qs.set('campaignStartDate', params.campaignStartDate);
-  if (params.campaignEndDate) qs.set('campaignEndDate', params.campaignEndDate);
-  const data = await apiFetch(`/api/campaign/preview?${qs.toString()}`);
-  return data;
-}
-
-export async function getGreenInstance(id) {
-  const data = await apiFetch(`/api/instances/${encodeURIComponent(id)}`, { method: 'GET' });
-  return data.instance;
-}
-
-export async function createGreenInstance(payload) {
-  return apiFetch('/api/instances', {
-    method: 'POST',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function updateGreenInstance(id, payload) {
-  return apiFetch(`/api/instances/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function deleteGreenInstance(id) {
-  const res = await fetch(BASE_URL + `/api/instances/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-    ...defaultFetchOpts,
-    headers: { Accept: 'application/json' },
-  });
-  if (res.status === 204) return;
-  const data = await parseJsonBody(res);
-  if (!res.ok) throw new Error(data?.error || 'Delete failed');
-}
-
-export async function refreshInstanceStatus(id) {
-  const res = await apiFetch(`/api/instances/${id}/refresh-status`, { method: 'POST' });
-  return res;
-}
-
-export async function updateInstanceActiveState(id, manualDisabled) {
-  const res = await apiFetch(`/api/instances/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ manualDisabled }),
-  });
-  return res;
 }
 
 export async function getMetaConfig() {
@@ -371,44 +287,3 @@ export async function getCampaignTemplates() {
   return apiFetch('/api/campaign/templates', { method: 'GET' });
 }
 
-export async function sendAllMessages() {
-  return apiFetch('/api/send', { method: 'POST' });
-}
-
-export async function getState() {
-  return apiFetch('/api/state');
-}
-
-export async function getStateByPhone(phone, greenInstanceId) {
-  const q = greenInstanceId
-    ? `?greenInstanceId=${encodeURIComponent(greenInstanceId)}`
-    : '';
-  return apiFetch(`/api/state/${encodeURIComponent(phone)}${q}`, { method: 'GET' });
-}
-
-// ============================================================
-// Phase 5 — Warm-up System
-// ============================================================
-
-export async function startWarmup() {
-  return apiFetch('/api/warmup/start', {
-    method: 'POST',
-    body: JSON.stringify({}),
-  });
-}
-
-export async function stopWarmup(sessionId) {
-  return apiFetch('/api/warmup/stop', {
-    method: 'POST',
-    body: JSON.stringify({ sessionId }),
-  });
-}
-
-export async function getWarmupStatus(sessionId) {
-  const q = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
-  return apiFetch(`/api/warmup/status${q}`, { method: 'GET' });
-}
-
-export async function listWarmupTemplates() {
-  return apiFetch('/api/warmup/templates', { method: 'GET' });
-}

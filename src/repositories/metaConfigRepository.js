@@ -15,6 +15,7 @@ async function getMetaConfigRow() {
     phoneNumberId: row.phoneNumberId != null ? String(row.phoneNumberId) : '',
     accessToken: row.accessToken != null ? String(row.accessToken) : '',
     graphVersion: row.graphVersion != null ? String(row.graphVersion) : '',
+    displayName: row.displayName != null ? String(row.displayName) : '',
     isEnabled: Number(row.isEnabled) === 1,
   };
 }

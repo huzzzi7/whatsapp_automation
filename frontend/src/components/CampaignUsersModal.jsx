@@ -27,6 +27,25 @@ function ContactStatusBadge({ status }) {
   return <span className={map[s] || 'campaign-users-modal__badge campaign-users-modal__badge--muted'}>{label}</span>;
 }
 
+function DeliveryStatusBadge({ status, error }) {
+  const s = String(status || '').toLowerCase();
+  if (!s) return <span className="campaign-users-modal__badge campaign-users-modal__badge--muted">—</span>;
+  const map = {
+    sent: 'campaign-users-modal__badge campaign-users-modal__badge--sent',
+    delivered: 'campaign-users-modal__badge campaign-users-modal__badge--delivered',
+    read: 'campaign-users-modal__badge campaign-users-modal__badge--read',
+    failed: 'campaign-users-modal__badge campaign-users-modal__badge--failed',
+  };
+  return (
+    <span
+      className={map[s] || 'campaign-users-modal__badge campaign-users-modal__badge--muted'}
+      title={s === 'failed' && error ? error : undefined}
+    >
+      {status}
+    </span>
+  );
+}
+
 /**
  * Mounted only while open; parent should set key={campaignId} to reset pagination per campaign.
  * @param {{ campaignId: string, onClose: () => void }} props
@@ -129,6 +148,7 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
                 <tr>
                   <th>Phone</th>
                   <th>Status</th>
+                  <th>Delivery</th>
                   <th>Sent at</th>
                   <th>Error</th>
                 </tr>
@@ -141,6 +161,9 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
                     </td>
                     <td>
                       <ContactStatusBadge status={row.firstSendStatus} />
+                    </td>
+                    <td>
+                      <DeliveryStatusBadge status={row.metaDeliveryStatus} error={row.metaDeliveryError} />
                     </td>
                     <td>{formatDt(row.sentAt)}</td>
                     <td className="campaign-users-modal__err-cell">{row.lastError || '—'}</td>

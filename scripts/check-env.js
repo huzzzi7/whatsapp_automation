@@ -36,7 +36,6 @@ for (const name of requiredNonEmpty) {
   }
 }
 
-// DB_PASSWORD may be empty for local MySQL; require key present after dotenv (empty string OK)
 if (!Object.prototype.hasOwnProperty.call(process.env, 'DB_PASSWORD')) {
   fail('DB_PASSWORD');
   exitCode = 1;
@@ -45,9 +44,6 @@ if (!Object.prototype.hasOwnProperty.call(process.env, 'DB_PASSWORD')) {
 }
 
 const recommended = [
-  ['MESSAGE_DELAY_MIN_MS', 'default from controlledSend'],
-  ['MESSAGE_DELAY_MAX_MS', 'default from controlledSend'],
-  ['GREEN_QUEUE_MAX', 'default from greenQueueMonitor'],
   ['CORS_ORIGIN', 'default empty — browser CORS may block'],
 ];
 for (const [name, detail] of recommended) {

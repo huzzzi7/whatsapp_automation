@@ -33,8 +33,6 @@ function formatCampaign(c) {
   const pendingFromDb = c.pendingCount != null && Number.isFinite(Number(c.pendingCount)) ? Number(c.pendingCount) : null;
   const deliveredFromDb = c.deliveredCount != null && Number.isFinite(Number(c.deliveredCount)) ? Number(c.deliveredCount) : null;
 
-  const instanceDetails = Array.isArray(c.instanceDetails) ? c.instanceDetails : null;
-
   const cleanName = c.name && String(c.name).trim() ? String(c.name).trim() : null;
   const idStr = c.id != null ? String(c.id) : '';
   const shortId = idStr.length >= 6 ? idStr.slice(0, 6) : idStr;
@@ -44,9 +42,8 @@ function formatCampaign(c) {
     name: cleanName,
     displayName: cleanName || `Campaign ${shortId}`,
     status: c.status,
-    greenInstanceId: c.greenInstanceId,
-    greenInstanceName: c.greenInstanceName ?? null,
-    greenInstancePhone: c.greenInstancePhone ?? null,
+    provider: c.provider || 'meta',
+    metaTemplateId: c.metaTemplateId ?? null,
     totalContacts: total,
     sentCount: sent,
     failedCount: failed,
@@ -68,9 +65,6 @@ function formatCampaign(c) {
     operationalDays: c.operationalDays ?? null,
     campaignStartDate: c.campaignStartDate ?? null,
     campaignEndDate: c.campaignEndDate ?? null,
-    dailyLimitPerInstance: c.dailyLimitPerInstance ?? null,
-    isMultiInstance: Boolean(c.isMultiInstance),
-    instanceDetails,
   };
 }
 
@@ -87,6 +81,9 @@ function formatContactSample(row) {
     sentAt: row.sent_at,
     lastError: row.last_error,
     attemptCount: row.attempt_count,
+    metaDeliveryStatus: row.meta_delivery_status ?? null,
+    metaDeliveryError: row.meta_delivery_error ?? null,
+    metaDeliveryUpdatedAt: row.meta_delivery_updated_at ?? null,
   };
 }
 

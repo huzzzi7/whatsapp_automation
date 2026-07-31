@@ -20,33 +20,15 @@ const queueOpts = {
   skipVersionCheck: bullMqSkipVersionCheck,
 };
 
-const messageQueue = new Queue('messageQueue', queueOpts);
-const replyQueue = new Queue('replyQueue', queueOpts);
 const followupQueue = new Queue('followupQueue', queueOpts);
-const warmupQueue = new Queue('warmupQueue', queueOpts);
 
-function attachErrorHandler(queue, name) {
-  queue.on('error', (err) => {
-    qlog.error({ event: 'queue_error', queue: name, err: err?.message || String(err) }, 'Queue error');
-  });
-}
-
-attachErrorHandler(messageQueue, 'messageQueue');
-attachErrorHandler(replyQueue, 'replyQueue');
-attachErrorHandler(followupQueue, 'followupQueue');
-attachErrorHandler(warmupQueue, 'warmupQueue');
+followupQueue.on('error', (err) => {
+  qlog.error({ event: 'queue_error', queue: 'followupQueue', err: err?.message || String(err) }, 'Queue error');
+});
 
 qlog.info(
-  {
-    event: 'queues_initialized',
-    queues: ['messageQueue', 'replyQueue', 'followupQueue', 'warmupQueue'],
-  },
+  { event: 'queues_initialized', queues: ['followupQueue'] },
   'BullMQ queues initialized',
 );
 
-module.exports = {
-  messageQueue,
-  replyQueue,
-  followupQueue,
-  warmupQueue,
-};
+module.exports = { followupQueue };

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getCampaignStats, listGreenInstances } from '../api';
+import { getCampaignStats } from '../api';
 import Card from '../components/ui/Card';
 
 export default function HomePage() {
@@ -7,27 +7,16 @@ export default function HomePage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [uniOpen, setUniOpen] = useState(false);
-  const [totalInstances, setTotalInstances] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      const [statsRes, instancesRes] = await Promise.allSettled([getCampaignStats(), listGreenInstances()]);
-      if (statsRes.status === 'fulfilled') {
-        setStats(statsRes.value);
-      } else {
-        throw statsRes.reason;
-      }
-      if (instancesRes.status === 'fulfilled') {
-        setTotalInstances(Array.isArray(instancesRes.value) ? instancesRes.value.length : 0);
-      } else {
-        setTotalInstances(0);
-      }
+      const data = await getCampaignStats();
+      setStats(data);
     } catch (e) {
       setError(e.message || 'Failed to load stats');
       setStats(null);
-      setTotalInstances(0);
     } finally {
       setLoading(false);
     }
@@ -64,10 +53,6 @@ export default function HomePage() {
             <Card className="home-dashboard__card">
               <div className="home-dashboard__card-label">Universities (distinct)</div>
               <div className="home-dashboard__card-value">{stats?.totalUniversities ?? 0}</div>
-            </Card>
-            <Card className="home-dashboard__card">
-              <div className="home-dashboard__card-label">Total Instances</div>
-              <div className="home-dashboard__card-value">{totalInstances}</div>
             </Card>
           </div>
 
