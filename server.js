@@ -4,7 +4,6 @@
  */
 require('dotenv').config();
 const { logger } = require('./src/utils/logger');
-const { closeCoordinatorWorker } = require('./src/queues/coordinatorWorker');
 const { registerCoordinatorJob } = require('./src/queues/registerCoordinatorJob');
 const express = require('express');
 const session = require('express-session');
@@ -1316,7 +1315,6 @@ function startListening() {
     const { runCoreMigrations } = require('./scripts/ensure-core-tables');
 
     const startQueueRegistrations = () => {
-      require('./src/queues/coordinatorWorker');
       registerCoordinatorJob().catch((err) =>
         logger.error({ err: err.message, event: 'coordinator_register_failed' }, 'Failed to register coordinator job'),
       );
@@ -1348,7 +1346,6 @@ startListening();
 
 process.on('SIGTERM', async () => {
   logger.info({ event: 'shutdown_sigterm' }, 'SIGTERM received, closing workers...');
-  await closeCoordinatorWorker();
   try {
     await pool.end();
   } catch (e) {
@@ -1358,7 +1355,6 @@ process.on('SIGTERM', async () => {
 });
 process.on('SIGINT', async () => {
   logger.info({ event: 'shutdown_sigint' }, 'SIGINT received, closing workers...');
-  await closeCoordinatorWorker();
   try {
     await pool.end();
   } catch (e) {
