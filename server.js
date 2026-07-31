@@ -125,7 +125,8 @@ app.get('/api/config', (req, res) => {
 });
 
 // ── Meta Cloud API webhook (verify + processes delivery status events; no inbound message processing) ──
-app.get('/api/webhook/meta', (req, res) => {
+// Aliased at /webhook/whatsapp-cloud to match the callback URL already registered in the Meta App dashboard.
+app.get(['/api/webhook/meta', '/webhook/whatsapp-cloud'], (req, res) => {
   const mode = String(req.query['hub.mode'] || '').trim();
   const token = String(req.query['hub.verify_token'] || '').trim();
   const challenge = req.query['hub.challenge'];
@@ -138,7 +139,7 @@ app.get('/api/webhook/meta', (req, res) => {
   return res.sendStatus(403);
 });
 
-app.post('/api/webhook/meta', express.raw({ type: '*/*', limit: '5mb' }), (req, res) => {
+app.post(['/api/webhook/meta', '/webhook/whatsapp-cloud'], express.raw({ type: '*/*', limit: '5mb' }), (req, res) => {
   const appSecret = String(process.env.META_APP_SECRET || '').trim();
   if (appSecret) {
     const signatureHeader = String(req.get('X-Hub-Signature-256') || '').trim();
