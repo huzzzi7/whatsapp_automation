@@ -166,6 +166,11 @@ app.post(['/api/webhook/meta', '/webhook/whatsapp-cloud'], express.raw({ type: '
   });
 });
 
+// Public, unauthenticated privacy policy page (required by Meta App Publish review).
+app.get('/privacy-policy', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'privacy-policy.html'));
+});
+
 app.use(express.json({ limit: '5mb' }));
 
 if (process.env.TRUST_PROXY === 'true') {
