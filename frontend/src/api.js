@@ -172,11 +172,12 @@ export async function getCampaignDetail(id) {
   return apiFetch(`/api/campaigns/${encodeURIComponent(id)}`, { method: 'GET' });
 }
 
-/** @returns {Promise<{ contacts: object[], total: number, page: number, limit: number, totalPages: number }>} */
-export async function listCampaignContacts(campaignId, { page = 1, limit = 50 } = {}) {
+/** @returns {Promise<{ contacts: object[], total: number, page: number, limit: number, totalPages: number, statusCounts: { sent: number, delivered: number, read: number, failed: number } }>} */
+export async function listCampaignContacts(campaignId, { page = 1, limit = 50, deliveryStatus = '' } = {}) {
   const q = new URLSearchParams();
   q.set('page', String(page));
   q.set('limit', String(limit));
+  if (deliveryStatus) q.set('deliveryStatus', deliveryStatus);
   return apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/contacts?${q}`, { method: 'GET' });
 }
 

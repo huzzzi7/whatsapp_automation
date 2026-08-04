@@ -295,27 +295,65 @@ async function getCampaignContactsSample(campaignId, limit = 20) {
   return rows;
 }
 
-async function countCampaignContacts(campaignId) {
-  const [[row]] = await pool.execute(
-    'SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE campaign_id = ?',
-    [campaignId],
-  );
+const DELIVERY_STATUS_VALUES = new Set(['sent', 'delivered', 'read', 'failed']);
+
+async function countCampaignContacts(campaignId, deliveryStatus) {
+  const status = deliveryStatus && DELIVERY_STATUS_VALUES.has(deliveryStatus) ? deliveryStatus : null;
+  const [[row]] = status
+    ? await pool.execute(
+        'SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE campaign_id = ? AND meta_delivery_status = ?',
+        [campaignId, status],
+      )
+    : await pool.execute(
+        'SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE campaign_id = ?',
+        [campaignId],
+      );
   return Number(row?.cnt) || 0;
 }
 
-async function listCampaignContactsPage(campaignId, page, limit) {
+/**
+ * @returns {Promise<{ sent: number, delivered: number, read: number, failed: number }>}
+ */
+async function getCampaignDeliveryStatusCounts(campaignId) {
+  const counts = { sent: 0, delivered: 0, read: 0, failed: 0 };
+  const [rows] = await pool.execute(
+    `SELECT meta_delivery_status AS status, COUNT(*) AS cnt
+     FROM campaign_contacts
+     WHERE campaign_id = ? AND meta_delivery_status IS NOT NULL
+     GROUP BY meta_delivery_status`,
+    [campaignId],
+  );
+  for (const r of rows || []) {
+    const key = String(r.status || '');
+    if (DELIVERY_STATUS_VALUES.has(key)) counts[key] = Number(r.cnt) || 0;
+  }
+  return counts;
+}
+
+async function listCampaignContactsPage(campaignId, page, limit, deliveryStatus) {
   const lim = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
   const pg = Math.max(1, Math.floor(Number(page) || 1));
   const offset = (pg - 1) * lim;
-  const [rows] = await pool.execute(
-    `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count,
-            meta_message_id, meta_delivery_status, meta_delivery_error, meta_delivery_updated_at
-     FROM campaign_contacts
-     WHERE campaign_id = ?
-     ORDER BY sort_order ASC, id ASC
-     LIMIT ${lim} OFFSET ${offset}`,
-    [campaignId],
-  );
+  const status = deliveryStatus && DELIVERY_STATUS_VALUES.has(deliveryStatus) ? deliveryStatus : null;
+  const [rows] = status
+    ? await pool.execute(
+        `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count,
+                meta_message_id, meta_delivery_status, meta_delivery_error, meta_delivery_updated_at
+         FROM campaign_contacts
+         WHERE campaign_id = ? AND meta_delivery_status = ?
+         ORDER BY sort_order ASC, id ASC
+         LIMIT ${lim} OFFSET ${offset}`,
+        [campaignId, status],
+      )
+    : await pool.execute(
+        `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count,
+                meta_message_id, meta_delivery_status, meta_delivery_error, meta_delivery_updated_at
+         FROM campaign_contacts
+         WHERE campaign_id = ?
+         ORDER BY sort_order ASC, id ASC
+         LIMIT ${lim} OFFSET ${offset}`,
+        [campaignId],
+      );
   return rows;
 }
 
@@ -583,6 +621,7 @@ module.exports = {
   countDeliveredContacts,
   getPendingDeliveredCountsByCampaignIds,
   countCampaignContacts,
+  getCampaignDeliveryStatusCounts,
   listCampaignContactsPage,
   deleteCampaignById,
 };

@@ -38,6 +38,7 @@ const {
   getCampaignContactsSample,
   countCampaignContacts,
   listCampaignContactsPage,
+  getCampaignDeliveryStatusCounts,
   updateCampaignStatus,
   deleteCampaignById,
   countPendingContacts,
@@ -1209,15 +1210,22 @@ app.get('/api/campaigns/:id/contacts', async (req, res) => {
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
     const limitRaw = parseInt(String(req.query.limit || '50'), 10);
     const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, limitRaw)) : 50;
-    const total = await countCampaignContacts(req.params.id);
-    const rows = await listCampaignContactsPage(req.params.id, page, limit);
+    const deliveryStatus = String(req.query.deliveryStatus || '').trim().toLowerCase() || null;
+    const [total, overallTotal, rows, statusCounts] = await Promise.all([
+      countCampaignContacts(req.params.id, deliveryStatus),
+      countCampaignContacts(req.params.id),
+      listCampaignContactsPage(req.params.id, page, limit, deliveryStatus),
+      getCampaignDeliveryStatusCounts(req.params.id),
+    ]);
     const totalPages = total > 0 ? Math.ceil(total / limit) : 1;
     res.json({
       contacts: rows.map((r) => formatContactSample(r)).filter(Boolean),
       total,
+      overallTotal,
       page,
       limit,
       totalPages,
+      statusCounts,
     });
   } catch (err) {
     console.error('[Campaigns contacts]', err);

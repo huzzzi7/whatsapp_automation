@@ -1532,6 +1532,49 @@ html[data-theme='dark'] .campaign-details__badge--paused {
   word-break: break-all;
 }
 
+.campaign-users-modal__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.campaign-users-modal__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.campaign-users-modal__filter:hover:not(:disabled) {
+  border-color: var(--primary);
+  color: var(--text);
+}
+
+.campaign-users-modal__filter:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.campaign-users-modal__filter--active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.campaign-users-modal__filter-count {
+  font-size: 0.75rem;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
 .campaign-users-modal__error {
   margin: 0;
 }

@@ -4,6 +4,14 @@ import { listCampaignContacts } from '../api';
 
 const PAGE_SIZE = 50;
 
+const DELIVERY_FILTERS = [
+  { value: '', label: 'All' },
+  { value: 'sent', label: 'Sent' },
+  { value: 'delivered', label: 'Delivered' },
+  { value: 'read', label: 'Read' },
+  { value: 'failed', label: 'Failed' },
+];
+
 function formatDt(value) {
   if (value == null) return '—';
   try {
@@ -54,9 +62,12 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
   const dialogRef = useRef(null);
   const modalRef = useRef(null);
   const [page, setPage] = useState(1);
+  const [deliveryFilter, setDeliveryFilter] = useState('');
   const [contacts, setContacts] = useState([]);
   const [total, setTotal] = useState(0);
+  const [overallTotal, setOverallTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [statusCounts, setStatusCounts] = useState({ sent: 0, delivered: 0, read: 0, failed: 0 });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -99,11 +110,18 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
       setLoading(true);
       setError('');
       try {
-        const data = await listCampaignContacts(campaignId, { page, limit: PAGE_SIZE });
+        const data = await listCampaignContacts(campaignId, { page, limit: PAGE_SIZE, deliveryStatus: deliveryFilter });
         if (cancelled) return;
         setContacts(Array.isArray(data?.contacts) ? data.contacts : []);
         setTotal(Number(data?.total) || 0);
+        setOverallTotal(Number(data?.overallTotal) || 0);
         setTotalPages(Math.max(1, Number(data?.totalPages) || 1));
+        setStatusCounts({
+          sent: Number(data?.statusCounts?.sent) || 0,
+          delivered: Number(data?.statusCounts?.delivered) || 0,
+          read: Number(data?.statusCounts?.read) || 0,
+          failed: Number(data?.statusCounts?.failed) || 0,
+        });
       } catch (e) {
         if (!cancelled) setError(e?.message || 'Failed to load recipients.');
       } finally {
@@ -113,11 +131,25 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
     return () => {
       cancelled = true;
     };
-  }, [campaignId, page]);
+  }, [campaignId, page, deliveryFilter]);
 
   const titleId = 'campaign-users-modal-title';
   const canPrev = page > 1;
   const canNext = page < totalPages;
+
+  const filterCounts = {
+    '': overallTotal,
+    sent: statusCounts.sent,
+    delivered: statusCounts.delivered,
+    read: statusCounts.read,
+    failed: statusCounts.failed,
+  };
+
+  const handleFilterClick = (value) => {
+    if (value === deliveryFilter) return;
+    setDeliveryFilter(value);
+    setPage(1);
+  };
 
   return (
     <dialog
@@ -133,12 +165,32 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
           <code className="campaign-users-modal__code">{campaignId}</code>
         </p>
 
+        <div className="campaign-users-modal__filters" role="tablist" aria-label="Filter by delivery status">
+          {DELIVERY_FILTERS.map((f) => (
+            <button
+              key={f.value || 'all'}
+              type="button"
+              role="tab"
+              aria-selected={deliveryFilter === f.value}
+              className={
+                deliveryFilter === f.value
+                  ? 'campaign-users-modal__filter campaign-users-modal__filter--active'
+                  : 'campaign-users-modal__filter'
+              }
+              onClick={() => handleFilterClick(f.value)}
+              disabled={loading}
+            >
+              {f.label} <span className="campaign-users-modal__filter-count">{filterCounts[f.value]}</span>
+            </button>
+          ))}
+        </div>
+
         {error ? <div className="alert-error campaign-users-modal__error">{error}</div> : null}
 
         {loading ? <p className="muted campaign-users-modal__loading">Loading…</p> : null}
 
         {!loading && !error && contacts.length === 0 ? (
-          <p className="muted">No contacts for this campaign.</p>
+          <p className="muted">No contacts match this filter.</p>
         ) : null}
 
         {contacts.length > 0 ? (
