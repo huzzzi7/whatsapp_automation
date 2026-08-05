@@ -13,6 +13,8 @@ const REQUIRED = [
   'sessions',
   'opted_out_contacts',
   'inbound_messages',
+  'university_links',
+  'pending_university_requests',
 ];
 
 const DDL = {
@@ -110,6 +112,20 @@ const DDL = {
   KEY idx_inbound_messages_from_phone (from_phone),
   KEY idx_inbound_messages_campaign_id (campaign_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  university_links: `CREATE TABLE IF NOT EXISTS university_links (
+  id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  university_name VARCHAR(255) NOT NULL,
+  group_link VARCHAR(500) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_university_links_name (university_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  pending_university_requests: `CREATE TABLE IF NOT EXISTS pending_university_requests (
+  phone_normalized VARCHAR(20) NOT NULL PRIMARY KEY,
+  requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 };
 
 async function runCoreMigrations() {
@@ -137,6 +153,8 @@ async function runCoreMigrations() {
     'sessions',
     'opted_out_contacts',
     'inbound_messages',
+    'university_links',
+    'pending_university_requests',
   ];
   for (const name of order) {
     if (existing.has(name)) {

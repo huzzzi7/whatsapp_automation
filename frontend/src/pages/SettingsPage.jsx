@@ -3,6 +3,7 @@ import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import MetaTemplateManager from '../components/settings/MetaTemplateManager';
 import OptedOutList from '../components/settings/OptedOutList';
+import UniversityLinkManager from '../components/settings/UniversityLinkManager';
 import {
   getMetaConfig,
   updateMetaConfig,
@@ -343,6 +344,17 @@ export default function SettingsPage() {
           excluded from new campaign uploads and from sending.
         </p>
         <OptedOutList />
+      </Card>
+
+      <div style={{ marginTop: '1.5rem' }} />
+
+      <Card>
+        <h2 style={{ marginTop: 0, marginBottom: '0.35rem' }}>University links</h2>
+        <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          Used when a contact says they're going to a different university — the reply sequence
+          matches their answer against this list and sends the right group link automatically.
+        </p>
+        <UniversityLinkManager />
       </Card>
     </div>
   );

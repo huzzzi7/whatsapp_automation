@@ -49,6 +49,7 @@ const { tryRunNext } = require('./src/services/CampaignCoordinator');
 const metaTemplateRepository = require('./src/repositories/metaTemplateRepository');
 const { getMetaConfigRow } = require('./src/repositories/metaConfigRepository');
 const optOutRepository = require('./src/repositories/optOutRepository');
+const universityLinkRepository = require('./src/repositories/universityLinkRepository');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
 
 const MIN_NODE_MAJOR = 20;
@@ -733,6 +734,65 @@ app.delete('/api/opted-out/:phone', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[Opted-out remove]', err);
     return res.status(500).json({ success: false, error: err.message || 'Failed to remove opt-out.' });
+  }
+});
+
+// ── University -> group link lookup (used by the "different uni" reply branch) ──────────
+app.get('/api/university-links', requireAdmin, async (req, res) => {
+  try {
+    const links = await universityLinkRepository.listUniversityLinks();
+    return res.json({ success: true, links });
+  } catch (err) {
+    console.error('[University links list]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to list university links.' });
+  }
+});
+
+app.post('/api/university-links', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const universityName = body.universityName != null ? String(body.universityName).trim() : '';
+    const groupLink = body.groupLink != null ? String(body.groupLink).trim() : '';
+    if (!universityName || !groupLink) {
+      return res.status(400).json({ success: false, error: 'universityName and groupLink are required.' });
+    }
+    const link = await universityLinkRepository.createUniversityLink({ universityName, groupLink });
+    return res.json({ success: true, link });
+  } catch (err) {
+    console.error('[University links create]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to create university link.' });
+  }
+});
+
+app.put('/api/university-links/:id', requireAdmin, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const universityName = body.universityName != null ? String(body.universityName).trim() : '';
+    const groupLink = body.groupLink != null ? String(body.groupLink).trim() : '';
+    if (!universityName || !groupLink) {
+      return res.status(400).json({ success: false, error: 'universityName and groupLink are required.' });
+    }
+    const link = await universityLinkRepository.updateUniversityLink(req.params.id, { universityName, groupLink });
+    if (!link) {
+      return res.status(404).json({ success: false, error: 'University link not found.' });
+    }
+    return res.json({ success: true, link });
+  } catch (err) {
+    console.error('[University links update]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to update university link.' });
+  }
+});
+
+app.delete('/api/university-links/:id', requireAdmin, async (req, res) => {
+  try {
+    const removed = await universityLinkRepository.deleteUniversityLink(req.params.id);
+    if (removed === 0) {
+      return res.status(404).json({ success: false, error: 'University link not found.' });
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[University links delete]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to delete university link.' });
   }
 });
 

@@ -275,6 +275,31 @@ export async function removeOptOut(phone) {
   return apiFetch(`/api/opted-out/${encodeURIComponent(phone)}`, { method: 'DELETE' });
 }
 
+export async function listUniversityLinks() {
+  const data = await apiFetch('/api/university-links', { method: 'GET' });
+  return data?.links ?? [];
+}
+
+export async function createUniversityLink(payload) {
+  const data = await apiFetch('/api/university-links', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+  return data?.link;
+}
+
+export async function updateUniversityLink(id, payload) {
+  const data = await apiFetch(`/api/university-links/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+  return data?.link;
+}
+
+export async function deleteUniversityLink(id) {
+  return apiFetch(`/api/university-links/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
 export async function uploadFile(formData) {
   const res = await fetch(BASE_URL + '/api/upload', {
     method: 'POST',

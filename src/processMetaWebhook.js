@@ -9,6 +9,7 @@ const { addOptOut, isOptedOut } = require('./repositories/optOutRepository');
 const { getMetaConfigRow } = require('./repositories/metaConfigRepository');
 const metaWhatsApp = require('./metaWhatsApp');
 const { OPT_OUT_BUTTON_PAYLOAD, OPT_OUT_KEYWORDS } = require('./utils/optOut');
+const replySequence = require('./services/replySequence');
 const { createLogger } = require('./utils/logger');
 
 const log = createLogger('metaWebhook');
@@ -146,7 +147,15 @@ async function applyInboundMessage(message) {
       return;
     }
 
-    await handleNonOptOutReply({ fromPhone, campaignId, messageType, bodyText, buttonId, buttonTitle, contactPayloadJson: recentContact?.payloadJson });
+    await replySequence.handleReply({
+      fromPhone,
+      campaignId,
+      messageType,
+      bodyText,
+      buttonId,
+      buttonTitle,
+      contactPayloadJson: recentContact?.payloadJson,
+    });
   } catch (err) {
     log.warn({ err: err.message, event: 'meta_webhook_inbound_apply_failed' }, 'Meta webhook: failed to apply inbound message');
   }
@@ -176,18 +185,6 @@ async function handleOptOut(fromPhone, source) {
   } catch (err) {
     log.warn({ err: err.message, event: 'meta_opt_out_ack_send_failed', fromPhone }, 'Failed to send opt-out acknowledgment');
   }
-}
-
-/**
- * Placeholder hand-off for the reply-driven message sequence (Phase 2). Currently logs only —
- * no reply is sent for non-opt-out inbound messages yet.
- */
-// eslint-disable-next-line no-unused-vars
-async function handleNonOptOutReply({ fromPhone, campaignId, messageType, bodyText, buttonId, buttonTitle }) {
-  log.info(
-    { event: 'meta_inbound_reply_unhandled', fromPhone, campaignId, messageType, buttonId },
-    'meta_inbound_reply_unhandled',
-  );
 }
 
 module.exports = { processMetaStatusWebhook };
