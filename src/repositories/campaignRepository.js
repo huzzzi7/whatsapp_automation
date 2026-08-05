@@ -4,6 +4,7 @@
 const pool = require('../mysql');
 const { normalizePhone } = require('../phone');
 const appConfig = require('../../config');
+const { filterOptedOut } = require('./optOutRepository');
 
 const BATCH_INSERT_SIZE = 500;
 
@@ -157,8 +158,15 @@ async function insertCampaignContacts(campaignId, users) {
       sortOrder: rows.length,
     });
   }
-  for (let offset = 0; offset < rows.length; offset += BATCH_INSERT_SIZE) {
-    const slice = rows.slice(offset, offset + BATCH_INSERT_SIZE);
+
+  const optedOut = await filterOptedOut(rows.map((r) => r.phoneNormalized));
+  const filteredRows = optedOut.size > 0 ? rows.filter((r) => !optedOut.has(r.phoneNormalized)) : rows;
+  filteredRows.forEach((r, i) => {
+    r.sortOrder = i;
+  });
+  const rowsToInsert = filteredRows;
+  for (let offset = 0; offset < rowsToInsert.length; offset += BATCH_INSERT_SIZE) {
+    const slice = rowsToInsert.slice(offset, offset + BATCH_INSERT_SIZE);
     const placeholders = slice.map(() => '(?, ?, ?, ?)').join(', ');
     const values = [];
     for (const r of slice) {
@@ -169,7 +177,7 @@ async function insertCampaignContacts(campaignId, users) {
       values,
     );
   }
-  return rows.length;
+  return rowsToInsert.length;
 }
 
 async function setTotalContacts(campaignId, totalContacts) {

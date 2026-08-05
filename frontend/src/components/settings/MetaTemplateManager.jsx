@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import Button from '../ui/Button';
-import { listMetaTemplates, createMetaTemplate, updateMetaTemplate, deleteMetaTemplate } from '../../api';
+import {
+  listMetaTemplates,
+  createMetaTemplate,
+  updateMetaTemplate,
+  deleteMetaTemplate,
+  verifyTemplateOptOutButton,
+} from '../../api';
 
 const EMPTY_FORM = { name: '', languageCode: 'en_GB', category: '', variables: [''] };
 
@@ -12,6 +18,7 @@ export default function MetaTemplateManager() {
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [verifyingId, setVerifyingId] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -113,6 +120,25 @@ export default function MetaTemplateManager() {
     }
   };
 
+  const handleVerifyOptOut = async (t) => {
+    setError('');
+    setMessage('');
+    setVerifyingId(t.id);
+    try {
+      const updated = await verifyTemplateOptOutButton(t.id);
+      setMessage(
+        updated?.hasOptOutButton
+          ? `"${t.name}" has a verified opt-out button.`
+          : `"${t.name}" does not have a qualifying opt-out button yet.`,
+      );
+      await load();
+    } catch (e) {
+      setError(e.message || 'Verification failed');
+    } finally {
+      setVerifyingId(null);
+    }
+  };
+
   return (
     <div>
       {error ? <div className="alert-error" style={{ marginBottom: '0.75rem' }}>{error}</div> : null}
@@ -145,6 +171,7 @@ export default function MetaTemplateManager() {
                 <th style={{ padding: '0.4rem 0.6rem' }}>Language</th>
                 <th style={{ padding: '0.4rem 0.6rem' }}>Category</th>
                 <th style={{ padding: '0.4rem 0.6rem' }}>Variables</th>
+                <th style={{ padding: '0.4rem 0.6rem' }}>Opt-out button</th>
                 <th style={{ padding: '0.4rem 0.6rem' }}></th>
               </tr>
             </thead>
@@ -159,7 +186,22 @@ export default function MetaTemplateManager() {
                       ? t.variables.map((v) => `{{${v}}}`).join(', ')
                       : '— (no variables)'}
                   </td>
+                  <td style={{ padding: '0.4rem 0.6rem' }}>
+                    {t.hasOptOutButton ? (
+                      <span style={{ color: 'var(--success, #16a34a)' }}>✓ Verified</span>
+                    ) : (
+                      <span style={{ color: 'var(--danger, #b91c1c)' }}>✗ Missing</span>
+                    )}
+                  </td>
                   <td style={{ padding: '0.4rem 0.6rem', whiteSpace: 'nowrap' }}>
+                    <Button
+                      type="button"
+                      className="ui-button--inline ui-button--secondary"
+                      onClick={() => handleVerifyOptOut(t)}
+                      disabled={verifyingId === t.id}
+                    >
+                      {verifyingId === t.id ? 'Checking…' : 'Re-check'}
+                    </Button>{' '}
                     <Button
                       type="button"
                       className="ui-button--inline ui-button--secondary"

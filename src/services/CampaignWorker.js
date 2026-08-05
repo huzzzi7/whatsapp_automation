@@ -7,6 +7,7 @@ const {
   getDailyContactsSentCount,
   markContactSent,
   markContactFailed,
+  markContactSkipped,
   incrementSentCount,
   incrementFailedCount,
   updateCampaignStatus,
@@ -14,6 +15,7 @@ const {
 } = require('../repositories/campaignRepository');
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
 const { getMetaTemplateById } = require('../repositories/metaTemplateRepository');
+const { filterOptedOut } = require('../repositories/optOutRepository');
 const { sendMetaTemplateBatch } = require('./metaCampaignSend');
 const { createLogger } = require('../utils/logger');
 
@@ -404,9 +406,9 @@ async function runCampaignWorker(campaignId) {
       }
     }
 
-    const contacts = await getPendingContacts(campaignId, batchSize);
+    const rawContacts = await getPendingContacts(campaignId, batchSize);
 
-    if (contacts.length === 0) {
+    if (rawContacts.length === 0) {
       const globalPending = await countPendingContacts(campaignId);
       if (globalPending > 0) {
         campLog.info(
@@ -418,6 +420,21 @@ async function runCampaignWorker(campaignId) {
       await updateCampaignStatus(campaignId, 'completed');
       campLog.info({ event: 'campaign_completed' }, 'completed');
       break;
+    }
+
+    // Final suppression guard: a contact may have opted out after being queued but before their turn to send.
+    const optedOutPhones = await filterOptedOut(rawContacts.map((c) => c.phoneNormalized));
+    const contacts = optedOutPhones.size > 0 ? rawContacts.filter((c) => !optedOutPhones.has(c.phoneNormalized)) : rawContacts;
+    if (optedOutPhones.size > 0) {
+      for (const c of rawContacts) {
+        if (optedOutPhones.has(c.phoneNormalized)) {
+          await markContactSkipped(Number(c.id), 'Recipient opted out');
+          campLog.info({ event: 'campaign_contact_skipped_opt_out', contactId: c.id }, 'skipped opted-out contact');
+        }
+      }
+    }
+    if (contacts.length === 0) {
+      continue;
     }
 
     batchNum += 1;

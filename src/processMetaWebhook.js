@@ -1,13 +1,21 @@
 /**
- * Processes real delivery-status events from Meta's WhatsApp Cloud API webhook
- * (POST /api/webhook/meta) and applies them to the matching campaign_contacts row.
+ * Processes real-time events from Meta's WhatsApp Cloud API webhook (POST /api/webhook/meta):
+ * - delivery-status events (statuses[]) → applied to the matching campaign_contacts row
+ * - inbound messages (messages[]) → logged, checked for opt-out, handed off for reply sequencing
  */
 const { updateContactMetaDeliveryStatus } = require('./repositories/campaignRepository');
+const { logInboundMessage, findRecentCampaignContactByPhone } = require('./repositories/inboundMessageRepository');
+const { addOptOut, isOptedOut } = require('./repositories/optOutRepository');
+const { getMetaConfigRow } = require('./repositories/metaConfigRepository');
+const metaWhatsApp = require('./metaWhatsApp');
+const { OPT_OUT_BUTTON_PAYLOAD, OPT_OUT_KEYWORDS } = require('./utils/optOut');
 const { createLogger } = require('./utils/logger');
 
 const log = createLogger('metaWebhook');
 
 const KNOWN_STATUSES = new Set(['sent', 'delivered', 'read', 'failed']);
+
+const OPT_OUT_ACK_TEXT = "You've been unsubscribed and won't receive further messages from us.";
 
 /**
  * @param {object} error - a Meta statuses[].errors[] entry
@@ -45,6 +53,11 @@ async function processMetaStatusWebhook(rawBody) {
         // eslint-disable-next-line no-await-in-loop
         await applyStatusEvent(status);
       }
+      const messages = Array.isArray(change?.value?.messages) ? change.value.messages : [];
+      for (const message of messages) {
+        // eslint-disable-next-line no-await-in-loop
+        await applyInboundMessage(message);
+      }
     }
   }
 }
@@ -71,6 +84,110 @@ async function applyStatusEvent(status) {
   } catch (err) {
     log.warn({ err: err.message, event: 'meta_webhook_status_apply_failed' }, 'Meta webhook: failed to apply status event');
   }
+}
+
+/**
+ * @param {object} message - a single Meta messages[] entry
+ */
+async function applyInboundMessage(message) {
+  try {
+    const fromPhone = message?.from != null ? String(message.from).trim() : '';
+    if (!fromPhone) return;
+
+    const metaMessageId = message?.id != null ? String(message.id) : null;
+    const type = message?.type != null ? String(message.type) : '';
+
+    let messageType = 'text';
+    let bodyText = null;
+    let buttonId = null;
+    let buttonTitle = null;
+
+    if (type === 'button') {
+      messageType = 'button';
+      buttonId = message?.button?.payload != null ? String(message.button.payload) : null;
+      buttonTitle = message?.button?.text != null ? String(message.button.text) : null;
+    } else if (type === 'text') {
+      messageType = 'text';
+      bodyText = message?.text?.body != null ? String(message.text.body) : null;
+    } else {
+      // Other inbound types (image, interactive list reply, etc.) aren't part of this reply
+      // sequence yet — still logged for visibility, no action taken.
+      messageType = type || 'text';
+    }
+
+    const recentContact = await findRecentCampaignContactByPhone(fromPhone);
+    const campaignId = recentContact?.campaignId ?? null;
+
+    const logged = await logInboundMessage({
+      metaMessageId,
+      fromPhone,
+      campaignId,
+      messageType,
+      bodyText,
+      buttonId,
+      buttonTitle,
+    });
+    if (logged === 0) {
+      // Already processed this exact wamid (Meta retried the webhook delivery) — skip re-acting on it.
+      return;
+    }
+
+    // Button payload behavior varies: some templates let you set a custom payload (e.g. "OPT_OUT"),
+    // others default the payload to the button's display text (e.g. "Opt out"). Match either way.
+    const isOptOutButton =
+      messageType === 'button' &&
+      (buttonId === OPT_OUT_BUTTON_PAYLOAD ||
+        OPT_OUT_KEYWORDS.test(buttonId || '') ||
+        OPT_OUT_KEYWORDS.test(buttonTitle || ''));
+    const isOptOutKeyword = messageType === 'text' && bodyText != null && OPT_OUT_KEYWORDS.test(bodyText);
+
+    if (isOptOutButton || isOptOutKeyword) {
+      await handleOptOut(fromPhone, isOptOutButton ? 'button' : 'keyword');
+      return;
+    }
+
+    await handleNonOptOutReply({ fromPhone, campaignId, messageType, bodyText, buttonId, buttonTitle, contactPayloadJson: recentContact?.payloadJson });
+  } catch (err) {
+    log.warn({ err: err.message, event: 'meta_webhook_inbound_apply_failed' }, 'Meta webhook: failed to apply inbound message');
+  }
+}
+
+/**
+ * @param {string} fromPhone
+ * @param {'button'|'keyword'} source
+ */
+async function handleOptOut(fromPhone, source) {
+  const alreadyOptedOut = await isOptedOut(fromPhone);
+  await addOptOut(fromPhone, source);
+  log.info({ event: 'meta_opt_out_recorded', fromPhone, source, alreadyOptedOut }, 'meta_opt_out_recorded');
+
+  if (alreadyOptedOut) return;
+
+  try {
+    const metaConfig = await getMetaConfigRow();
+    if (!metaConfig || !metaConfig.isEnabled) return;
+    await metaWhatsApp.sendTextMessage({
+      to: fromPhone,
+      phoneNumberId: metaConfig.phoneNumberId,
+      accessToken: metaConfig.accessToken,
+      text: OPT_OUT_ACK_TEXT,
+      graphVersion: metaConfig.graphVersion || undefined,
+    });
+  } catch (err) {
+    log.warn({ err: err.message, event: 'meta_opt_out_ack_send_failed', fromPhone }, 'Failed to send opt-out acknowledgment');
+  }
+}
+
+/**
+ * Placeholder hand-off for the reply-driven message sequence (Phase 2). Currently logs only —
+ * no reply is sent for non-opt-out inbound messages yet.
+ */
+// eslint-disable-next-line no-unused-vars
+async function handleNonOptOutReply({ fromPhone, campaignId, messageType, bodyText, buttonId, buttonTitle }) {
+  log.info(
+    { event: 'meta_inbound_reply_unhandled', fromPhone, campaignId, messageType, buttonId },
+    'meta_inbound_reply_unhandled',
+  );
 }
 
 module.exports = { processMetaStatusWebhook };

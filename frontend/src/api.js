@@ -258,6 +258,23 @@ export async function deleteMetaTemplate(id) {
   return apiFetch(`/api/meta-templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+export async function verifyTemplateOptOutButton(id) {
+  const data = await apiFetch(`/api/meta-templates/${encodeURIComponent(id)}/verify-opt-out-button`, {
+    method: 'POST',
+    body: '{}',
+  });
+  return data?.template;
+}
+
+export async function listOptedOutContacts() {
+  const data = await apiFetch('/api/opted-out', { method: 'GET' });
+  return data?.contacts ?? [];
+}
+
+export async function removeOptOut(phone) {
+  return apiFetch(`/api/opted-out/${encodeURIComponent(phone)}`, { method: 'DELETE' });
+}
+
 export async function uploadFile(formData) {
   const res = await fetch(BASE_URL + '/api/upload', {
     method: 'POST',

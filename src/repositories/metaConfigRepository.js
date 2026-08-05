@@ -5,7 +5,7 @@ const pool = require('../mysql');
 
 const META_CONFIG_ID = 1;
 
-/** @returns {Promise<{id:number, phoneNumberId:string, accessToken:string, graphVersion:string, isEnabled:boolean}|null>} */
+/** @returns {Promise<{id:number, phoneNumberId:string, accessToken:string, graphVersion:string, displayName:string, wabaId:string, isEnabled:boolean}|null>} */
 async function getMetaConfigRow() {
   const [rows] = await pool.execute('SELECT * FROM meta_config WHERE id = ? LIMIT 1', [META_CONFIG_ID]);
   const row = rows[0];
@@ -16,6 +16,7 @@ async function getMetaConfigRow() {
     accessToken: row.accessToken != null ? String(row.accessToken) : '',
     graphVersion: row.graphVersion != null ? String(row.graphVersion) : '',
     displayName: row.displayName != null ? String(row.displayName) : '',
+    wabaId: row.wabaId != null ? String(row.wabaId) : '',
     isEnabled: Number(row.isEnabled) === 1,
   };
 }

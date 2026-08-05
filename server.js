@@ -48,6 +48,7 @@ const {
 const { tryRunNext } = require('./src/services/CampaignCoordinator');
 const metaTemplateRepository = require('./src/repositories/metaTemplateRepository');
 const { getMetaConfigRow } = require('./src/repositories/metaConfigRepository');
+const optOutRepository = require('./src/repositories/optOutRepository');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
 
 const MIN_NODE_MAJOR = 20;
@@ -600,6 +601,32 @@ app.post('/api/meta/test-send', requireAdmin, async (req, res) => {
   }
 });
 
+/**
+ * Fetches the template's live, approved definition from Meta and persists whether it has a
+ * qualifying opt-out Quick Reply button. Best-effort — on any failure (network, missing config,
+ * template not found yet on Meta's side), leaves the template's existing flag untouched and
+ * returns it unchanged so callers never hard-fail on this.
+ */
+async function verifyTemplateOptOutButton(template) {
+  if (!template) return template;
+  try {
+    const metaConfig = await getMetaConfigRow();
+    if (!metaConfig || !metaConfig.wabaId || !metaConfig.accessToken) return template;
+    const remote = await metaWhatsApp.findTemplateByNameAndLanguage({
+      wabaId: metaConfig.wabaId,
+      accessToken: metaConfig.accessToken,
+      name: template.name,
+      languageCode: template.languageCode,
+      graphVersion: metaConfig.graphVersion || undefined,
+    });
+    const hasButton = metaWhatsApp.templateHasOptOutButton(remote);
+    return await metaTemplateRepository.setHasOptOutButton(template.id, hasButton);
+  } catch (err) {
+    console.warn('[Meta templates] opt-out button verification failed:', err.message);
+    return template;
+  }
+}
+
 // ── Meta templates (registry for campaign use) ─────────────────────────
 app.get('/api/meta-templates', requireAdmin, async (req, res) => {
   try {
@@ -621,7 +648,8 @@ app.post('/api/meta-templates', requireAdmin, async (req, res) => {
     if (!name || !languageCode) {
       return res.status(400).json({ success: false, error: 'name and languageCode are required.' });
     }
-    const template = await metaTemplateRepository.createMetaTemplate({ name, languageCode, category, variables });
+    let template = await metaTemplateRepository.createMetaTemplate({ name, languageCode, category, variables });
+    template = await verifyTemplateOptOutButton(template);
     return res.json({ success: true, template });
   } catch (err) {
     console.error('[Meta templates create]', err);
@@ -643,16 +671,31 @@ app.put('/api/meta-templates/:id', requireAdmin, async (req, res) => {
     if (!name || !languageCode) {
       return res.status(400).json({ success: false, error: 'name and languageCode are required.' });
     }
-    const template = await metaTemplateRepository.updateMetaTemplate(req.params.id, {
+    let template = await metaTemplateRepository.updateMetaTemplate(req.params.id, {
       name,
       languageCode,
       category,
       variables,
     });
+    template = await verifyTemplateOptOutButton(template);
     return res.json({ success: true, template });
   } catch (err) {
     console.error('[Meta templates update]', err);
     return res.status(500).json({ success: false, error: err.message || 'Failed to update template.' });
+  }
+});
+
+app.post('/api/meta-templates/:id/verify-opt-out-button', requireAdmin, async (req, res) => {
+  try {
+    const existing = await metaTemplateRepository.getMetaTemplateById(req.params.id);
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Template not found.' });
+    }
+    const template = await verifyTemplateOptOutButton(existing);
+    return res.json({ success: true, template });
+  } catch (err) {
+    console.error('[Meta templates verify-opt-out-button]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to verify opt-out button.' });
   }
 });
 
@@ -667,6 +710,29 @@ app.delete('/api/meta-templates/:id', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error('[Meta templates delete]', err);
     return res.status(500).json({ success: false, error: err.message || 'Failed to delete template.' });
+  }
+});
+
+app.get('/api/opted-out', requireAdmin, async (req, res) => {
+  try {
+    const contacts = await optOutRepository.listOptedOut();
+    return res.json({ success: true, contacts });
+  } catch (err) {
+    console.error('[Opted-out list]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to list opted-out contacts.' });
+  }
+});
+
+app.delete('/api/opted-out/:phone', requireAdmin, async (req, res) => {
+  try {
+    const removed = await optOutRepository.removeOptOut(req.params.phone);
+    if (removed === 0) {
+      return res.status(404).json({ success: false, error: 'Phone number not found in opt-out list.' });
+    }
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[Opted-out remove]', err);
+    return res.status(500).json({ success: false, error: err.message || 'Failed to remove opt-out.' });
   }
 });
 
@@ -844,6 +910,13 @@ app.post('/api/campaign/start', async (req, res) => {
     const template = await metaTemplateRepository.getMetaTemplateById(metaTemplateId);
     if (!template) {
       return res.status(400).json({ ok: false, error: 'Invalid metaTemplateId.' });
+    }
+    if (!template.hasOptOutButton) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          'This template does not have a verified opt-out button. Add a Quick Reply opt-out button in Meta Business Manager, then re-check it in Settings → Meta Templates before starting a campaign.',
+      });
     }
 
     const safeBatchSize = Math.max(1, Math.floor(Number(batchSize) || 20));

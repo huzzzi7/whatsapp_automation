@@ -18,6 +18,7 @@ function mapTemplateRow(row) {
     languageCode: row.language_code,
     category: row.category ?? null,
     variables,
+    hasOptOutButton: Number(row.has_opt_out_button) === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -71,10 +72,22 @@ async function deleteMetaTemplate(id) {
   return Number(result.affectedRows) || 0;
 }
 
+/**
+ * @param {number|string} id
+ * @param {boolean} value
+ */
+async function setHasOptOutButton(id, value) {
+  const templateId = Number(id);
+  if (!Number.isFinite(templateId)) return null;
+  await pool.execute('UPDATE meta_templates SET has_opt_out_button = ? WHERE id = ?', [value ? 1 : 0, templateId]);
+  return getMetaTemplateById(templateId);
+}
+
 module.exports = {
   listMetaTemplates,
   getMetaTemplateById,
   createMetaTemplate,
   updateMetaTemplate,
   deleteMetaTemplate,
+  setHasOptOutButton,
 };

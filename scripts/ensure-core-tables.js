@@ -11,6 +11,8 @@ const REQUIRED = [
   'campaigns',
   'campaign_contacts',
   'sessions',
+  'opted_out_contacts',
+  'inbound_messages',
 ];
 
 const DDL = {
@@ -87,6 +89,27 @@ const DDL = {
   data mediumtext COLLATE utf8mb4_bin,
   PRIMARY KEY (session_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
+
+  opted_out_contacts: `CREATE TABLE IF NOT EXISTS opted_out_contacts (
+  phone_normalized VARCHAR(20) NOT NULL PRIMARY KEY,
+  opted_out_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  source VARCHAR(20) NOT NULL DEFAULT 'keyword'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  inbound_messages: `CREATE TABLE IF NOT EXISTS inbound_messages (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  meta_message_id VARCHAR(255) NULL,
+  from_phone VARCHAR(20) NOT NULL,
+  campaign_id CHAR(36) NULL,
+  message_type VARCHAR(20) NOT NULL DEFAULT 'text',
+  body_text TEXT NULL,
+  button_id VARCHAR(255) NULL,
+  button_title VARCHAR(255) NULL,
+  received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_inbound_messages_meta_message_id (meta_message_id),
+  KEY idx_inbound_messages_from_phone (from_phone),
+  KEY idx_inbound_messages_campaign_id (campaign_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 };
 
 async function runCoreMigrations() {
@@ -112,6 +135,8 @@ async function runCoreMigrations() {
     'campaigns',
     'campaign_contacts',
     'sessions',
+    'opted_out_contacts',
+    'inbound_messages',
   ];
   for (const name of order) {
     if (existing.has(name)) {
@@ -140,8 +165,28 @@ async function runCoreMigrations() {
   await ensureCampaignScheduleColumns(conn);
   await ensureCampaignMetaTemplateColumn(conn);
   await ensureCampaignContactsMetaDeliveryColumns(conn);
+  await ensureMetaTemplatesOptOutButtonColumn(conn);
 
   await conn.end();
+}
+
+/** meta_templates.has_opt_out_button — verified (via Meta Graph API) presence of a Quick Reply opt-out button. */
+async function ensureMetaTemplatesOptOutButtonColumn(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'meta_templates' AND COLUMN_NAME = 'has_opt_out_button'`,
+    [schema],
+  );
+  if (Number(rows[0]?.cnt) === 0) {
+    console.log('MIGRATE: meta_templates — adding has_opt_out_button column');
+    await conn.query(
+      'ALTER TABLE meta_templates ADD COLUMN has_opt_out_button TINYINT(1) NOT NULL DEFAULT 0',
+    );
+  }
 }
 
 async function ensureCampaignScheduleColumns(conn) {

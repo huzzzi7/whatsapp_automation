@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import MetaTemplateManager from '../components/settings/MetaTemplateManager';
+import OptedOutList from '../components/settings/OptedOutList';
 import {
   getMetaConfig,
   updateMetaConfig,
@@ -150,7 +151,7 @@ export default function SettingsPage() {
       <Card>
         <h2 style={{ marginTop: 0, marginBottom: '0.35rem' }}>Meta WhatsApp</h2>
         <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-          Outbound templates only — inbound replies are not processed
+          Sends approved templates; inbound replies are checked for opt-out requests automatically
         </p>
 
         {metaLoading ? <p style={{ color: 'var(--text-muted)' }}>Loading Meta config…</p> : null}
@@ -331,6 +332,17 @@ export default function SettingsPage() {
           Register the exact template name and variable names Meta approved, then pick one per campaign in the Wizard.
         </p>
         <MetaTemplateManager />
+      </Card>
+
+      <div style={{ marginTop: '1.5rem' }} />
+
+      <Card>
+        <h2 style={{ marginTop: 0, marginBottom: '0.35rem' }}>Opted-out contacts</h2>
+        <p style={{ margin: '0 0 1rem', fontSize: '0.875rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+          Contacts who tapped the opt-out button or replied STOP/unsubscribe. They're automatically
+          excluded from new campaign uploads and from sending.
+        </p>
+        <OptedOutList />
       </Card>
     </div>
   );
