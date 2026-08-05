@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Button from './ui/Button';
-import { listCampaignContacts } from '../api';
+import { listCampaignContacts, sendConversationMessage } from '../api';
 
 const PAGE_SIZE = 50;
 
@@ -54,6 +54,58 @@ function DeliveryStatusBadge({ status, error }) {
   );
 }
 
+/** Inline quick-reply box for a single contact row; owns its own text/sending state. */
+function ReplyCell({ phone }) {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSend = async () => {
+    if (!text.trim()) return;
+    setSending(true);
+    setError('');
+    try {
+      await sendConversationMessage(phone, { text: text.trim() });
+      setText('');
+      setSent(true);
+      setTimeout(() => setSent(false), 2000);
+    } catch (e) {
+      setError(e.message || 'Send failed');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 4, alignItems: 'center', minWidth: 180 }}>
+      <input
+        className="ui-input-field"
+        style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem' }}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Reply…"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            handleSend();
+          }
+        }}
+        title={error || undefined}
+      />
+      <Button
+        type="button"
+        className="ui-button--inline ui-button--secondary"
+        style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem' }}
+        onClick={handleSend}
+        disabled={sending || !text.trim()}
+      >
+        {sending ? '…' : sent ? '✓' : 'Send'}
+      </Button>
+    </div>
+  );
+}
+
 /**
  * Mounted only while open; parent should set key={campaignId} to reset pagination per campaign.
  * @param {{ campaignId: string, onClose: () => void }} props
@@ -63,9 +115,11 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
   const modalRef = useRef(null);
   const [page, setPage] = useState(1);
   const [deliveryFilter, setDeliveryFilter] = useState('');
+  const [repliedFilter, setRepliedFilter] = useState(false);
   const [contacts, setContacts] = useState([]);
   const [total, setTotal] = useState(0);
   const [overallTotal, setOverallTotal] = useState(0);
+  const [repliedCount, setRepliedCount] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [statusCounts, setStatusCounts] = useState({ sent: 0, delivered: 0, read: 0, failed: 0 });
   const [loading, setLoading] = useState(false);
@@ -110,11 +164,17 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
       setLoading(true);
       setError('');
       try {
-        const data = await listCampaignContacts(campaignId, { page, limit: PAGE_SIZE, deliveryStatus: deliveryFilter });
+        const data = await listCampaignContacts(campaignId, {
+          page,
+          limit: PAGE_SIZE,
+          deliveryStatus: deliveryFilter,
+          hasReplied: repliedFilter,
+        });
         if (cancelled) return;
         setContacts(Array.isArray(data?.contacts) ? data.contacts : []);
         setTotal(Number(data?.total) || 0);
         setOverallTotal(Number(data?.overallTotal) || 0);
+        setRepliedCount(Number(data?.repliedCount) || 0);
         setTotalPages(Math.max(1, Number(data?.totalPages) || 1));
         setStatusCounts({
           sent: Number(data?.statusCounts?.sent) || 0,
@@ -131,7 +191,7 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
     return () => {
       cancelled = true;
     };
-  }, [campaignId, page, deliveryFilter]);
+  }, [campaignId, page, deliveryFilter, repliedFilter]);
 
   const titleId = 'campaign-users-modal-title';
   const canPrev = page > 1;
@@ -151,6 +211,11 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
     setPage(1);
   };
 
+  const handleRepliedToggle = () => {
+    setRepliedFilter((v) => !v);
+    setPage(1);
+  };
+
   return (
     <dialog
       ref={dialogRef}
@@ -163,6 +228,8 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
         </h2>
         <p className="campaign-users-modal__hint">
           <code className="campaign-users-modal__code">{campaignId}</code>
+          {' · '}
+          {repliedCount} contact{repliedCount === 1 ? '' : 's'} replied
         </p>
 
         <div className="campaign-users-modal__filters" role="tablist" aria-label="Filter by delivery status">
@@ -183,6 +250,20 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
               {f.label} <span className="campaign-users-modal__filter-count">{filterCounts[f.value]}</span>
             </button>
           ))}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={repliedFilter}
+            className={
+              repliedFilter
+                ? 'campaign-users-modal__filter campaign-users-modal__filter--active'
+                : 'campaign-users-modal__filter'
+            }
+            onClick={handleRepliedToggle}
+            disabled={loading}
+          >
+            Replied <span className="campaign-users-modal__filter-count">{repliedCount}</span>
+          </button>
         </div>
 
         {error ? <div className="alert-error campaign-users-modal__error">{error}</div> : null}
@@ -202,6 +283,9 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
                   <th>Status</th>
                   <th>Delivery</th>
                   <th>Sent at</th>
+                  <th>Replies</th>
+                  <th>Last reply</th>
+                  <th>Reply</th>
                   <th>Error</th>
                 </tr>
               </thead>
@@ -218,6 +302,13 @@ export default function CampaignUsersModal({ campaignId, onClose }) {
                       <DeliveryStatusBadge status={row.metaDeliveryStatus} error={row.metaDeliveryError} />
                     </td>
                     <td>{formatDt(row.sentAt)}</td>
+                    <td>{row.replyCount > 0 ? row.replyCount : '—'}</td>
+                    <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {row.lastReplyPreview || '—'}
+                    </td>
+                    <td>
+                      <ReplyCell phone={row.phoneNormalized} />
+                    </td>
                     <td className="campaign-users-modal__err-cell">{row.lastError || '—'}</td>
                   </tr>
                 ))}

@@ -305,17 +305,37 @@ async function getCampaignContactsSample(campaignId, limit = 20) {
 
 const DELIVERY_STATUS_VALUES = new Set(['sent', 'delivered', 'read', 'failed']);
 
-async function countCampaignContacts(campaignId, deliveryStatus) {
+const REPLIED_EXISTS_SQL = `EXISTS (
+  SELECT 1 FROM conversation_messages cm
+  WHERE cm.campaign_id = campaign_contacts.campaign_id
+    AND cm.phone_normalized = campaign_contacts.phone_normalized
+    AND cm.direction = 'inbound'
+)`;
+
+async function countCampaignContacts(campaignId, deliveryStatus, hasReplied) {
   const status = deliveryStatus && DELIVERY_STATUS_VALUES.has(deliveryStatus) ? deliveryStatus : null;
-  const [[row]] = status
-    ? await pool.execute(
-        'SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE campaign_id = ? AND meta_delivery_status = ?',
-        [campaignId, status],
-      )
-    : await pool.execute(
-        'SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE campaign_id = ?',
-        [campaignId],
-      );
+  const conditions = ['campaign_id = ?'];
+  const params = [campaignId];
+  if (status) {
+    conditions.push('meta_delivery_status = ?');
+    params.push(status);
+  }
+  if (hasReplied) {
+    conditions.push(REPLIED_EXISTS_SQL);
+  }
+  const [[row]] = await pool.execute(
+    `SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE ${conditions.join(' AND ')}`,
+    params,
+  );
+  return Number(row?.cnt) || 0;
+}
+
+/** Total distinct contacts in this campaign with at least one inbound reply logged. */
+async function countRepliedContacts(campaignId) {
+  const [[row]] = await pool.execute(
+    `SELECT COUNT(*) AS cnt FROM campaign_contacts WHERE campaign_id = ? AND ${REPLIED_EXISTS_SQL}`,
+    [campaignId],
+  );
   return Number(row?.cnt) || 0;
 }
 
@@ -338,30 +358,31 @@ async function getCampaignDeliveryStatusCounts(campaignId) {
   return counts;
 }
 
-async function listCampaignContactsPage(campaignId, page, limit, deliveryStatus) {
+async function listCampaignContactsPage(campaignId, page, limit, deliveryStatus, hasReplied) {
   const lim = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
   const pg = Math.max(1, Math.floor(Number(page) || 1));
   const offset = (pg - 1) * lim;
   const status = deliveryStatus && DELIVERY_STATUS_VALUES.has(deliveryStatus) ? deliveryStatus : null;
-  const [rows] = status
-    ? await pool.execute(
-        `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count,
-                meta_message_id, meta_delivery_status, meta_delivery_error, meta_delivery_updated_at
-         FROM campaign_contacts
-         WHERE campaign_id = ? AND meta_delivery_status = ?
-         ORDER BY sort_order ASC, id ASC
-         LIMIT ${lim} OFFSET ${offset}`,
-        [campaignId, status],
-      )
-    : await pool.execute(
-        `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count,
-                meta_message_id, meta_delivery_status, meta_delivery_error, meta_delivery_updated_at
-         FROM campaign_contacts
-         WHERE campaign_id = ?
-         ORDER BY sort_order ASC, id ASC
-         LIMIT ${lim} OFFSET ${offset}`,
-        [campaignId],
-      );
+
+  const conditions = ['campaign_id = ?'];
+  const params = [campaignId];
+  if (status) {
+    conditions.push('meta_delivery_status = ?');
+    params.push(status);
+  }
+  if (hasReplied) {
+    conditions.push(REPLIED_EXISTS_SQL);
+  }
+
+  const [rows] = await pool.execute(
+    `SELECT id, phone_normalized, first_send_status, sort_order, sent_at, last_error, attempt_count,
+            meta_message_id, meta_delivery_status, meta_delivery_error, meta_delivery_updated_at
+     FROM campaign_contacts
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY sort_order ASC, id ASC
+     LIMIT ${lim} OFFSET ${offset}`,
+    params,
+  );
   return rows;
 }
 
@@ -629,6 +650,7 @@ module.exports = {
   countDeliveredContacts,
   getPendingDeliveredCountsByCampaignIds,
   countCampaignContacts,
+  countRepliedContacts,
   getCampaignDeliveryStatusCounts,
   listCampaignContactsPage,
   deleteCampaignById,

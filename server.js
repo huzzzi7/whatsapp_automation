@@ -37,6 +37,7 @@ const {
   listCampaigns,
   getCampaignContactsSample,
   countCampaignContacts,
+  countRepliedContacts,
   listCampaignContactsPage,
   getCampaignDeliveryStatusCounts,
   updateCampaignStatus,
@@ -50,6 +51,8 @@ const metaTemplateRepository = require('./src/repositories/metaTemplateRepositor
 const { getMetaConfigRow } = require('./src/repositories/metaConfigRepository');
 const optOutRepository = require('./src/repositories/optOutRepository');
 const universityLinkRepository = require('./src/repositories/universityLinkRepository');
+const conversationRepository = require('./src/repositories/conversationRepository');
+const { mediaFilePath, writeMediaFile } = require('./src/utils/mediaStorage');
 const { formatCampaign, formatContactSample } = require('./src/utils/campaignFormat');
 
 const MIN_NODE_MAJOR = 20;
@@ -796,6 +799,161 @@ app.delete('/api/university-links/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// ── Conversations (chat inbox) ───────────────────────────────────────────
+const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 16 * 1024 * 1024 },
+});
+
+app.get('/api/conversations', async (req, res) => {
+  try {
+    const campaignId = req.query.campaignId ? String(req.query.campaignId).trim() : null;
+    const deliveryStatus = req.query.deliveryStatus ? String(req.query.deliveryStatus).trim().toLowerCase() : null;
+    const unseenOnly = String(req.query.unseen || '').toLowerCase() === 'true';
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limitRaw = parseInt(String(req.query.limit || '50'), 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, limitRaw)) : 50;
+    const result = await conversationRepository.listConversations({
+      campaignId,
+      deliveryStatus,
+      unseenOnly,
+      page,
+      limit,
+    });
+    res.json({ success: true, ...result, page, limit });
+  } catch (err) {
+    console.error('[Conversations list]', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to list conversations.' });
+  }
+});
+
+app.get('/api/conversations/:phone/messages', async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const limitRaw = parseInt(String(req.query.limit || '100'), 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(500, Math.max(1, limitRaw)) : 100;
+    const messages = await conversationRepository.getConversationMessages(req.params.phone, { page, limit });
+    res.json({ success: true, messages });
+  } catch (err) {
+    console.error('[Conversation messages]', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to load conversation.' });
+  }
+});
+
+app.post('/api/conversations/:phone/seen', async (req, res) => {
+  try {
+    await conversationRepository.markConversationSeen(req.params.phone);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Conversation mark seen]', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to mark conversation as seen.' });
+  }
+});
+
+app.post('/api/conversations/:phone/messages', mediaUpload.single('file'), async (req, res) => {
+  try {
+    const phone = String(req.params.phone || '').trim();
+    if (!phone) {
+      return res.status(400).json({ success: false, error: 'Phone number is required.' });
+    }
+    const text = req.body?.text != null ? String(req.body.text).trim() : '';
+    const metaConfig = await getMetaConfigRow();
+    if (!metaConfig || !metaConfig.isEnabled) {
+      return res.status(400).json({ success: false, error: 'Meta config not found or disabled.' });
+    }
+    const adminUserId = req.session?.user?.id ?? null;
+
+    if (req.file && req.file.buffer) {
+      const mimeType = req.file.mimetype || 'application/octet-stream';
+      const mediaType = mimeType.startsWith('image/')
+        ? 'image'
+        : mimeType.startsWith('video/')
+          ? 'video'
+          : mimeType.startsWith('audio/')
+            ? 'audio'
+            : 'document';
+
+      const mediaId = await metaWhatsApp.uploadMedia({
+        phoneNumberId: metaConfig.phoneNumberId,
+        accessToken: metaConfig.accessToken,
+        buffer: req.file.buffer,
+        mimeType,
+        filename: req.file.originalname,
+        graphVersion: metaConfig.graphVersion || undefined,
+      });
+
+      const sendRes = await metaWhatsApp.sendMediaMessage({
+        to: phone,
+        phoneNumberId: metaConfig.phoneNumberId,
+        accessToken: metaConfig.accessToken,
+        mediaType,
+        mediaId,
+        caption: text || undefined,
+        filename: req.file.originalname,
+        graphVersion: metaConfig.graphVersion || undefined,
+      });
+
+      const storedFilename = writeMediaFile(req.file.buffer);
+
+      await conversationRepository.logMessage({
+        phoneNormalized: phone,
+        direction: 'outbound',
+        sender: 'admin',
+        adminUserId,
+        metaMessageId: sendRes?.messages?.[0]?.id ?? null,
+        messageType: mediaType,
+        mediaPath: storedFilename,
+        mediaMimeType: mimeType,
+        mediaFilename: req.file.originalname,
+        mediaCaption: text || null,
+      });
+
+      return res.json({ success: true });
+    }
+
+    if (!text) {
+      return res.status(400).json({ success: false, error: 'text or file is required.' });
+    }
+
+    const sendRes = await metaWhatsApp.sendTextMessage({
+      to: phone,
+      phoneNumberId: metaConfig.phoneNumberId,
+      accessToken: metaConfig.accessToken,
+      text,
+      graphVersion: metaConfig.graphVersion || undefined,
+    });
+
+    await conversationRepository.logMessage({
+      phoneNormalized: phone,
+      direction: 'outbound',
+      sender: 'admin',
+      adminUserId,
+      metaMessageId: sendRes?.messages?.[0]?.id ?? null,
+      messageType: 'text',
+      bodyText: text,
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error('[Conversation send]', err);
+    res.status(500).json({ success: false, error: err.message || 'Failed to send message.' });
+  }
+});
+
+app.get('/api/media/:filename', (req, res) => {
+  const filename = String(req.params.filename || '').trim();
+  if (!/^[a-f0-9-]{36}$/i.test(filename)) {
+    return res.status(400).json({ error: 'Invalid media id.' });
+  }
+  const filePath = mediaFilePath(filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Media not found.' });
+  }
+  const mimeType = req.query.mime ? String(req.query.mime) : 'application/octet-stream';
+  res.setHeader('Content-Type', mimeType);
+  fs.createReadStream(filePath).pipe(res);
+});
+
 // POST /api/upload – accept .xlsx, parse, return users list
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
@@ -1344,17 +1502,33 @@ app.get('/api/campaigns/:id/contacts', async (req, res) => {
     const limitRaw = parseInt(String(req.query.limit || '50'), 10);
     const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, limitRaw)) : 50;
     const deliveryStatus = String(req.query.deliveryStatus || '').trim().toLowerCase() || null;
-    const [total, overallTotal, rows, statusCounts] = await Promise.all([
-      countCampaignContacts(req.params.id, deliveryStatus),
+    const hasReplied = String(req.query.hasReplied || '').toLowerCase() === 'true';
+    const [total, overallTotal, repliedCount, rows, statusCounts, replyCounts] = await Promise.all([
+      countCampaignContacts(req.params.id, deliveryStatus, hasReplied),
       countCampaignContacts(req.params.id),
-      listCampaignContactsPage(req.params.id, page, limit, deliveryStatus),
+      countRepliedContacts(req.params.id),
+      listCampaignContactsPage(req.params.id, page, limit, deliveryStatus, hasReplied),
       getCampaignDeliveryStatusCounts(req.params.id),
+      conversationRepository.getReplyCountsByCampaign(req.params.id),
     ]);
     const totalPages = total > 0 ? Math.ceil(total / limit) : 1;
+    const contacts = rows
+      .map((r) => formatContactSample(r))
+      .filter(Boolean)
+      .map((row) => {
+        const reply = replyCounts.get(row.phoneNormalized);
+        return {
+          ...row,
+          replyCount: reply?.count ?? 0,
+          lastReplyAt: reply?.lastReplyAt ?? null,
+          lastReplyPreview: reply?.lastReplyPreview ?? null,
+        };
+      });
     res.json({
-      contacts: rows.map((r) => formatContactSample(r)).filter(Boolean),
+      contacts,
       total,
       overallTotal,
+      repliedCount,
       page,
       limit,
       totalPages,

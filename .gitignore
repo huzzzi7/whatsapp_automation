@@ -11,3 +11,5 @@ test-conversation-state.json
 
 logs/app.log.txt
 logs/*.log.txt
+
+uploads/

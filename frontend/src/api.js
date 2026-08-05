@@ -172,12 +172,13 @@ export async function getCampaignDetail(id) {
   return apiFetch(`/api/campaigns/${encodeURIComponent(id)}`, { method: 'GET' });
 }
 
-/** @returns {Promise<{ contacts: object[], total: number, page: number, limit: number, totalPages: number, statusCounts: { sent: number, delivered: number, read: number, failed: number } }>} */
-export async function listCampaignContacts(campaignId, { page = 1, limit = 50, deliveryStatus = '' } = {}) {
+/** @returns {Promise<{ contacts: object[], total: number, overallTotal: number, repliedCount: number, page: number, limit: number, totalPages: number, statusCounts: { sent: number, delivered: number, read: number, failed: number } }>} */
+export async function listCampaignContacts(campaignId, { page = 1, limit = 50, deliveryStatus = '', hasReplied = false } = {}) {
   const q = new URLSearchParams();
   q.set('page', String(page));
   q.set('limit', String(limit));
   if (deliveryStatus) q.set('deliveryStatus', deliveryStatus);
+  if (hasReplied) q.set('hasReplied', 'true');
   return apiFetch(`/api/campaigns/${encodeURIComponent(campaignId)}/contacts?${q}`, { method: 'GET' });
 }
 
@@ -298,6 +299,59 @@ export async function updateUniversityLink(id, payload) {
 
 export async function deleteUniversityLink(id) {
   return apiFetch(`/api/university-links/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** @returns {Promise<{ total: number, conversations: object[], page: number, limit: number }>} */
+export async function listConversations({ campaignId = '', deliveryStatus = '', unseen = false, page = 1, limit = 50 } = {}) {
+  const q = new URLSearchParams();
+  if (campaignId) q.set('campaignId', campaignId);
+  if (deliveryStatus) q.set('deliveryStatus', deliveryStatus);
+  if (unseen) q.set('unseen', 'true');
+  q.set('page', String(page));
+  q.set('limit', String(limit));
+  return apiFetch(`/api/conversations?${q}`, { method: 'GET' });
+}
+
+/** @returns {Promise<{ messages: object[] }>} */
+export async function getConversationMessages(phone, { page = 1, limit = 100 } = {}) {
+  const q = new URLSearchParams();
+  q.set('page', String(page));
+  q.set('limit', String(limit));
+  return apiFetch(`/api/conversations/${encodeURIComponent(phone)}/messages?${q}`, { method: 'GET' });
+}
+
+export async function markConversationSeen(phone) {
+  return apiFetch(`/api/conversations/${encodeURIComponent(phone)}/seen`, { method: 'POST', body: '{}' });
+}
+
+/**
+ * @param {string} phone
+ * @param {{ text?: string, file?: File }} payload
+ */
+export async function sendConversationMessage(phone, { text = '', file = null } = {}) {
+  if (file) {
+    const form = new FormData();
+    if (text) form.append('text', text);
+    form.append('file', file);
+    const res = await fetch(`${BASE_URL}/api/conversations/${encodeURIComponent(phone)}/messages`, {
+      method: 'POST',
+      body: form,
+      ...defaultFetchOpts,
+    });
+    const data = await parseJsonBody(res);
+    if (!res.ok || data.success === false) throw new Error(data?.error || 'Failed to send message');
+    return data;
+  }
+  return apiFetch(`/api/conversations/${encodeURIComponent(phone)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  });
+}
+
+/** @returns {string} URL for an <img>/<a> tag; safe to use directly, same-origin cookies apply. */
+export function getMediaUrl(mediaPath, mimeType) {
+  const q = mimeType ? `?mime=${encodeURIComponent(mimeType)}` : '';
+  return `${BASE_URL}/api/media/${encodeURIComponent(mediaPath)}${q}`;
 }
 
 export async function uploadFile(formData) {

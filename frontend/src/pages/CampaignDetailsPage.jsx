@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import CampaignUsersModal from '../components/CampaignUsersModal';
@@ -380,6 +381,28 @@ function ViewUsersButton({ campaignId, onView }) {
   );
 }
 
+function IconChat() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+    </svg>
+  );
+}
+
+function OpenChatsButton({ campaignId, onOpen }) {
+  return (
+    <button
+      type="button"
+      className="campaign-details__icon-btn"
+      title="Open chats"
+      aria-label="Open chats"
+      onClick={() => onOpen(campaignId)}
+    >
+      <IconChat />
+    </button>
+  );
+}
+
 /**
  * Prefer non-empty `runningAll`; if API sends `runningAll: []` but legacy `running` is set, use `running`.
  * Avoids treating "no runnings" when one campaign is actually running (mis-synced payloads).
@@ -403,6 +426,8 @@ const EXPIRED_DAY_OPTIONS = [
 ];
 
 export default function CampaignDetailsPage() {
+  const navigate = useNavigate();
+
   const isCampaignExpired = (campaign) => {
     if (!campaign?.campaignEndDate) return false;
     const today = new Date().toISOString().slice(0, 10);
@@ -438,6 +463,13 @@ export default function CampaignDetailsPage() {
   const handleViewUsers = useCallback((id) => {
     setSelectedCampaignId(id);
   }, []);
+
+  const handleOpenChats = useCallback(
+    (id) => {
+      navigate(`/chats?campaignId=${encodeURIComponent(id)}`);
+    },
+    [navigate],
+  );
 
   const handleCloseDetails = useCallback(() => {
     setDetailsModalOpen(false);
@@ -674,6 +706,7 @@ export default function CampaignDetailsPage() {
           <div className="campaign-details__card-head-actions">
             <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
             <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+            <OpenChatsButton campaignId={c.id} onOpen={handleOpenChats} />
           </div>
         </div>
         <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -721,6 +754,7 @@ export default function CampaignDetailsPage() {
             <div className="campaign-details__card-head-actions">
               <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
               <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+              <OpenChatsButton campaignId={c.id} onOpen={handleOpenChats} />
             </div>
           </div>
           <div style={{ marginTop: '0.5rem' }}>
@@ -806,6 +840,7 @@ export default function CampaignDetailsPage() {
                             <div className="campaign-details__queue-actions">
                               <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
                               <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+                              <OpenChatsButton campaignId={c.id} onOpen={handleOpenChats} />
                               <Button
                                 type="button"
                                 className="ui-button--inline ui-button--secondary campaign-details__btn-stop"
@@ -880,6 +915,7 @@ export default function CampaignDetailsPage() {
                         <div className="campaign-details__history-actions-inner">
                           <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
                           <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
+                          <OpenChatsButton campaignId={c.id} onOpen={handleOpenChats} />
                           <button
                             type="button"
                             className="btn-delete btn-icon"

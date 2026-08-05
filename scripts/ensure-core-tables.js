@@ -15,6 +15,8 @@ const REQUIRED = [
   'inbound_messages',
   'university_links',
   'pending_university_requests',
+  'conversations',
+  'conversation_messages',
 ];
 
 const DDL = {
@@ -126,6 +128,43 @@ const DDL = {
   phone_normalized VARCHAR(20) NOT NULL PRIMARY KEY,
   requested_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  conversations: `CREATE TABLE IF NOT EXISTS conversations (
+  phone_normalized VARCHAR(20) NOT NULL PRIMARY KEY,
+  display_name VARCHAR(255) NULL,
+  last_message_at TIMESTAMP NULL DEFAULT NULL,
+  last_message_preview VARCHAR(500) NULL,
+  last_seen_by_admin_at TIMESTAMP NULL DEFAULT NULL,
+  last_campaign_id CHAR(36) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_conversations_last_message_at (last_message_at),
+  KEY idx_conversations_last_campaign_id (last_campaign_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
+  conversation_messages: `CREATE TABLE IF NOT EXISTS conversation_messages (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  phone_normalized VARCHAR(20) NOT NULL,
+  campaign_id CHAR(36) NULL,
+  direction VARCHAR(10) NOT NULL,
+  sender VARCHAR(20) NOT NULL,
+  meta_message_id VARCHAR(255) NULL,
+  message_type VARCHAR(20) NOT NULL DEFAULT 'text',
+  body_text TEXT NULL,
+  button_id VARCHAR(255) NULL,
+  button_title VARCHAR(255) NULL,
+  media_path VARCHAR(500) NULL,
+  media_mime_type VARCHAR(100) NULL,
+  media_filename VARCHAR(255) NULL,
+  media_caption TEXT NULL,
+  reaction_emoji VARCHAR(20) NULL,
+  reaction_target_message_id VARCHAR(255) NULL,
+  admin_user_id VARCHAR(50) NULL,
+  send_error TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_conversation_messages_meta_message_id (meta_message_id),
+  KEY idx_conversation_messages_phone_created (phone_normalized, created_at),
+  KEY idx_conversation_messages_campaign (campaign_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 };
 
 async function runCoreMigrations() {
@@ -155,6 +194,8 @@ async function runCoreMigrations() {
     'inbound_messages',
     'university_links',
     'pending_university_requests',
+    'conversations',
+    'conversation_messages',
   ];
   for (const name of order) {
     if (existing.has(name)) {

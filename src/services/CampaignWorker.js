@@ -16,6 +16,7 @@ const {
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
 const { getMetaTemplateById } = require('../repositories/metaTemplateRepository');
 const { filterOptedOut } = require('../repositories/optOutRepository');
+const conversationRepository = require('../repositories/conversationRepository');
 const { sendMetaTemplateBatch } = require('./metaCampaignSend');
 const { createLogger } = require('../utils/logger');
 
@@ -452,7 +453,17 @@ async function runCampaignWorker(campaignId) {
     for (let i = 0; i < contacts.length; i += 1) {
       const c = contacts[i];
       if (sentSet.has(c.phoneNormalized)) {
-        await markContactSent(Number(c.id), sentMessageIds?.[c.phoneNormalized]);
+        const wamid = sentMessageIds?.[c.phoneNormalized];
+        await markContactSent(Number(c.id), wamid);
+        await conversationRepository.logMessage({
+          phoneNormalized: c.phoneNormalized,
+          campaignId,
+          direction: 'outbound',
+          sender: 'system',
+          metaMessageId: wamid ?? null,
+          messageType: 'template',
+          bodyText: `Template "${metaTemplate.name}" sent`,
+        });
         sent += 1;
         continue;
       }

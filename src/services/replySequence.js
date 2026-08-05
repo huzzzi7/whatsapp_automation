@@ -11,6 +11,7 @@ const {
   setPendingUniversityRequest,
   clearPendingUniversityRequest,
 } = require('../repositories/pendingRequestRepository');
+const conversationRepository = require('../repositories/conversationRepository');
 const { classifyReplyIntent } = require('../utils/replyIntent');
 const metaWhatsApp = require('../metaWhatsApp');
 const { createLogger } = require('../utils/logger');
@@ -41,18 +42,27 @@ function parseContactPayload(payloadJson) {
   }
 }
 
-async function sendReplyText(toPhone, text) {
+async function sendReplyText(toPhone, text, campaignId = null) {
   const metaConfig = await getMetaConfigRow();
   if (!metaConfig || !metaConfig.isEnabled) {
     log.warn({ event: 'meta_reply_send_skipped_no_config', toPhone }, 'Meta config missing/disabled, cannot send reply');
     return;
   }
-  await metaWhatsApp.sendTextMessage({
+  const res = await metaWhatsApp.sendTextMessage({
     to: toPhone,
     phoneNumberId: metaConfig.phoneNumberId,
     accessToken: metaConfig.accessToken,
     text,
     graphVersion: metaConfig.graphVersion || undefined,
+  });
+  await conversationRepository.logMessage({
+    phoneNormalized: toPhone,
+    campaignId,
+    direction: 'outbound',
+    sender: 'system',
+    metaMessageId: res?.messages?.[0]?.id ?? null,
+    messageType: 'text',
+    bodyText: text,
   });
 }
 
@@ -68,7 +78,7 @@ async function handleReply({ fromPhone, campaignId, messageType, bodyText, butto
       await clearPendingUniversityRequest(fromPhone);
       const universityName = bodyText != null ? String(bodyText).trim() : '';
       const link = await findUniversityLink(universityName);
-      await sendReplyText(fromPhone, link ? universityLinkFoundText(link) : UNIVERSITY_LINK_NOT_FOUND_TEXT);
+      await sendReplyText(fromPhone, link ? universityLinkFoundText(link) : UNIVERSITY_LINK_NOT_FOUND_TEXT, campaignId);
       log.info(
         { event: 'meta_reply_different_uni_answered', fromPhone, campaignId, universityName, matched: Boolean(link) },
         'meta_reply_different_uni_answered',
@@ -80,7 +90,7 @@ async function handleReply({ fromPhone, campaignId, messageType, bodyText, butto
 
     if (intent === 'different_uni') {
       await setPendingUniversityRequest(fromPhone);
-      await sendReplyText(fromPhone, ASK_WHICH_UNIVERSITY_TEXT);
+      await sendReplyText(fromPhone, ASK_WHICH_UNIVERSITY_TEXT, campaignId);
       log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent }, 'meta_reply_intent');
       return;
     }
@@ -88,13 +98,13 @@ async function handleReply({ fromPhone, campaignId, messageType, bodyText, butto
     if (intent === 'interested') {
       const payload = parseContactPayload(contactPayloadJson);
       const link = payload.link != null && String(payload.link).trim() ? String(payload.link).trim() : null;
-      await sendReplyText(fromPhone, link ? interestedText(link) : INTERESTED_NO_LINK_TEXT);
+      await sendReplyText(fromPhone, link ? interestedText(link) : INTERESTED_NO_LINK_TEXT, campaignId);
       log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent, hasLink: Boolean(link) }, 'meta_reply_intent');
       return;
     }
 
     if (intent === 'not_interested') {
-      await sendReplyText(fromPhone, NOT_INTERESTED_TEXT);
+      await sendReplyText(fromPhone, NOT_INTERESTED_TEXT, campaignId);
       log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent }, 'meta_reply_intent');
       return;
     }

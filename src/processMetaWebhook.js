@@ -1,20 +1,24 @@
 /**
  * Processes real-time events from Meta's WhatsApp Cloud API webhook (POST /api/webhook/meta):
  * - delivery-status events (statuses[]) → applied to the matching campaign_contacts row
- * - inbound messages (messages[]) → logged, checked for opt-out, handed off for reply sequencing
+ * - inbound messages (messages[]) → logged to the conversation thread, checked for opt-out,
+ *   handed off for reply sequencing
  */
 const { updateContactMetaDeliveryStatus } = require('./repositories/campaignRepository');
-const { logInboundMessage, findRecentCampaignContactByPhone } = require('./repositories/inboundMessageRepository');
+const { findRecentCampaignContactByPhone } = require('./repositories/inboundMessageRepository');
 const { addOptOut, isOptedOut } = require('./repositories/optOutRepository');
 const { getMetaConfigRow } = require('./repositories/metaConfigRepository');
+const conversationRepository = require('./repositories/conversationRepository');
 const metaWhatsApp = require('./metaWhatsApp');
 const { OPT_OUT_BUTTON_PAYLOAD, OPT_OUT_KEYWORDS } = require('./utils/optOut');
+const { writeMediaFile } = require('./utils/mediaStorage');
 const replySequence = require('./services/replySequence');
 const { createLogger } = require('./utils/logger');
 
 const log = createLogger('metaWebhook');
 
 const KNOWN_STATUSES = new Set(['sent', 'delivered', 'read', 'failed']);
+const MEDIA_TYPES = new Set(['image', 'document', 'video', 'audio', 'sticker']);
 
 const OPT_OUT_ACK_TEXT = "You've been unsubscribed and won't receive further messages from us.";
 
@@ -54,10 +58,13 @@ async function processMetaStatusWebhook(rawBody) {
         // eslint-disable-next-line no-await-in-loop
         await applyStatusEvent(status);
       }
+      const contacts = Array.isArray(change?.value?.contacts) ? change.value.contacts : [];
       const messages = Array.isArray(change?.value?.messages) ? change.value.messages : [];
       for (const message of messages) {
+        const contact = contacts.find((c) => c?.wa_id === message?.from);
+        const displayName = contact?.profile?.name != null ? String(contact.profile.name) : null;
         // eslint-disable-next-line no-await-in-loop
-        await applyInboundMessage(message);
+        await applyInboundMessage(message, displayName);
       }
     }
   }
@@ -88,9 +95,31 @@ async function applyStatusEvent(status) {
 }
 
 /**
- * @param {object} message - a single Meta messages[] entry
+ * Downloads inbound media immediately (Meta's URL expires after 5 minutes) and stores it under
+ * MEDIA_DIR. Filename on disk is a bare UUID; the mime type is tracked separately in the DB so
+ * the media-serving route can set the right Content-Type.
+ * @returns {Promise<{ path: string, mimeType: string }>}
  */
-async function applyInboundMessage(message) {
+async function downloadAndStoreInboundMedia(metaMediaId) {
+  const metaConfig = await getMetaConfigRow();
+  if (!metaConfig || !metaConfig.accessToken) {
+    throw new Error('Meta config missing/disabled, cannot download media');
+  }
+  const { buffer, mimeType } = await metaWhatsApp.downloadMedia({
+    mediaId: metaMediaId,
+    phoneNumberId: metaConfig.phoneNumberId,
+    accessToken: metaConfig.accessToken,
+    graphVersion: metaConfig.graphVersion || undefined,
+  });
+  const filename = writeMediaFile(buffer);
+  return { path: filename, mimeType };
+}
+
+/**
+ * @param {object} message - a single Meta messages[] entry
+ * @param {string|null} displayName - the customer's own WhatsApp display name, from webhook contacts[]
+ */
+async function applyInboundMessage(message, displayName) {
   try {
     const fromPhone = message?.from != null ? String(message.from).trim() : '';
     if (!fromPhone) return;
@@ -102,6 +131,12 @@ async function applyInboundMessage(message) {
     let bodyText = null;
     let buttonId = null;
     let buttonTitle = null;
+    let mediaPath = null;
+    let mediaMimeType = null;
+    let mediaFilename = null;
+    let mediaCaption = null;
+    let reactionEmoji = null;
+    let reactionTargetMessageId = null;
 
     if (type === 'button') {
       messageType = 'button';
@@ -110,28 +145,60 @@ async function applyInboundMessage(message) {
     } else if (type === 'text') {
       messageType = 'text';
       bodyText = message?.text?.body != null ? String(message.text.body) : null;
+    } else if (MEDIA_TYPES.has(type)) {
+      messageType = type;
+      const mediaObj = message?.[type];
+      mediaCaption = mediaObj?.caption != null ? String(mediaObj.caption) : null;
+      mediaFilename = mediaObj?.filename != null ? String(mediaObj.filename) : null;
+      const metaMediaId = mediaObj?.id != null ? String(mediaObj.id) : null;
+      if (metaMediaId) {
+        try {
+          const downloaded = await downloadAndStoreInboundMedia(metaMediaId);
+          mediaPath = downloaded.path;
+          mediaMimeType = downloaded.mimeType;
+        } catch (err) {
+          log.warn(
+            { err: err.message, event: 'meta_inbound_media_download_failed', metaMediaId },
+            'Failed to download inbound media',
+          );
+        }
+      }
+    } else if (type === 'reaction') {
+      messageType = 'reaction';
+      reactionEmoji = message?.reaction?.emoji != null ? String(message.reaction.emoji) : null;
+      reactionTargetMessageId = message?.reaction?.message_id != null ? String(message.reaction.message_id) : null;
     } else {
-      // Other inbound types (image, interactive list reply, etc.) aren't part of this reply
-      // sequence yet — still logged for visibility, no action taken.
       messageType = type || 'text';
     }
 
     const recentContact = await findRecentCampaignContactByPhone(fromPhone);
     const campaignId = recentContact?.campaignId ?? null;
 
-    const logged = await logInboundMessage({
-      metaMessageId,
-      fromPhone,
+    const logged = await conversationRepository.logMessage({
+      phoneNormalized: fromPhone,
       campaignId,
+      direction: 'inbound',
+      sender: 'customer',
+      metaMessageId,
       messageType,
       bodyText,
       buttonId,
       buttonTitle,
+      mediaPath,
+      mediaMimeType,
+      mediaFilename,
+      mediaCaption,
+      reactionEmoji,
+      reactionTargetMessageId,
+      displayName,
     });
     if (logged === 0) {
       // Already processed this exact wamid (Meta retried the webhook delivery) — skip re-acting on it.
       return;
     }
+
+    // Opt-out and the reply sequence only apply to text/button replies to Message 1.
+    if (messageType !== 'text' && messageType !== 'button') return;
 
     // Button payload behavior varies: some templates let you set a custom payload (e.g. "OPT_OUT"),
     // others default the payload to the button's display text (e.g. "Opt out"). Match either way.
@@ -143,7 +210,7 @@ async function applyInboundMessage(message) {
     const isOptOutKeyword = messageType === 'text' && bodyText != null && OPT_OUT_KEYWORDS.test(bodyText);
 
     if (isOptOutButton || isOptOutKeyword) {
-      await handleOptOut(fromPhone, isOptOutButton ? 'button' : 'keyword');
+      await handleOptOut(fromPhone, isOptOutButton ? 'button' : 'keyword', campaignId);
       return;
     }
 
@@ -164,8 +231,9 @@ async function applyInboundMessage(message) {
 /**
  * @param {string} fromPhone
  * @param {'button'|'keyword'} source
+ * @param {string|null} campaignId
  */
-async function handleOptOut(fromPhone, source) {
+async function handleOptOut(fromPhone, source, campaignId = null) {
   const alreadyOptedOut = await isOptedOut(fromPhone);
   await addOptOut(fromPhone, source);
   log.info({ event: 'meta_opt_out_recorded', fromPhone, source, alreadyOptedOut }, 'meta_opt_out_recorded');
@@ -175,12 +243,21 @@ async function handleOptOut(fromPhone, source) {
   try {
     const metaConfig = await getMetaConfigRow();
     if (!metaConfig || !metaConfig.isEnabled) return;
-    await metaWhatsApp.sendTextMessage({
+    const res = await metaWhatsApp.sendTextMessage({
       to: fromPhone,
       phoneNumberId: metaConfig.phoneNumberId,
       accessToken: metaConfig.accessToken,
       text: OPT_OUT_ACK_TEXT,
       graphVersion: metaConfig.graphVersion || undefined,
+    });
+    await conversationRepository.logMessage({
+      phoneNormalized: fromPhone,
+      campaignId,
+      direction: 'outbound',
+      sender: 'system',
+      metaMessageId: res?.messages?.[0]?.id ?? null,
+      messageType: 'text',
+      bodyText: OPT_OUT_ACK_TEXT,
     });
   } catch (err) {
     log.warn({ err: err.message, event: 'meta_opt_out_ack_send_failed', fromPhone }, 'Failed to send opt-out acknowledgment');
