@@ -1,8 +1,9 @@
 /**
- * Message 2 branching logic: given a non-opt-out inbound reply to Message 1, decides which
- * Message 2 variant to send. Always sent as free-form text — Message 2 is a direct reply to the
- * recipient's own inbound message, so it's within Meta's 24h customer-service window and needs
- * no separate template approval.
+ * Message 2 branching logic for a non-opt-out inbound reply to Message 1. Button taps stay
+ * deterministic (fast, free, unambiguous); free-text replies route through the AI reply service
+ * so the conversation can go beyond the three known branches and still sound natural. All
+ * replies are sent as free-form text — within Meta's 24h customer-service window, needing no
+ * separate template approval.
  */
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
 const { findUniversityLink } = require('../repositories/universityLinkRepository');
@@ -12,6 +13,7 @@ const {
   clearPendingUniversityRequest,
 } = require('../repositories/pendingRequestRepository');
 const conversationRepository = require('../repositories/conversationRepository');
+const aiReplyService = require('./aiReplyService');
 const { classifyReplyIntent } = require('../utils/replyIntent');
 const metaWhatsApp = require('../metaWhatsApp');
 const { createLogger } = require('../utils/logger');
@@ -42,7 +44,7 @@ function parseContactPayload(payloadJson) {
   }
 }
 
-async function sendReplyText(toPhone, text, campaignId = null) {
+async function sendReplyText(toPhone, text, campaignId = null, sender = 'system') {
   const metaConfig = await getMetaConfigRow();
   if (!metaConfig || !metaConfig.isEnabled) {
     log.warn({ event: 'meta_reply_send_skipped_no_config', toPhone }, 'Meta config missing/disabled, cannot send reply');
@@ -59,7 +61,7 @@ async function sendReplyText(toPhone, text, campaignId = null) {
     phoneNormalized: toPhone,
     campaignId,
     direction: 'outbound',
-    sender: 'system',
+    sender,
     metaMessageId: res?.messages?.[0]?.id ?? null,
     messageType: 'text',
     bodyText: text,
@@ -79,6 +81,12 @@ async function handleReply({ fromPhone, campaignId, messageType, bodyText, butto
       const universityName = bodyText != null ? String(bodyText).trim() : '';
       const link = await findUniversityLink(universityName);
       await sendReplyText(fromPhone, link ? universityLinkFoundText(link) : UNIVERSITY_LINK_NOT_FOUND_TEXT, campaignId);
+      if (universityName) {
+        await conversationRepository.applyLeadSignals(fromPhone, {
+          confirmedInterest: true,
+          confirmedUniversity: universityName,
+        });
+      }
       log.info(
         { event: 'meta_reply_different_uni_answered', fromPhone, campaignId, universityName, matched: Boolean(link) },
         'meta_reply_different_uni_answered',
@@ -86,32 +94,63 @@ async function handleReply({ fromPhone, campaignId, messageType, bodyText, butto
       return;
     }
 
-    const intent = classifyReplyIntent({ messageType, buttonId, buttonTitle, bodyText });
+    if (messageType === 'button') {
+      const intent = classifyReplyIntent({ messageType, buttonId, buttonTitle, bodyText });
 
-    if (intent === 'different_uni') {
-      await setPendingUniversityRequest(fromPhone);
-      await sendReplyText(fromPhone, ASK_WHICH_UNIVERSITY_TEXT, campaignId);
-      log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent }, 'meta_reply_intent');
+      if (intent === 'different_uni') {
+        await setPendingUniversityRequest(fromPhone);
+        await sendReplyText(fromPhone, ASK_WHICH_UNIVERSITY_TEXT, campaignId);
+        log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent }, 'meta_reply_intent');
+        return;
+      }
+
+      if (intent === 'interested') {
+        const payload = parseContactPayload(contactPayloadJson);
+        const link = payload.link != null && String(payload.link).trim() ? String(payload.link).trim() : null;
+        await sendReplyText(fromPhone, link ? interestedText(link) : INTERESTED_NO_LINK_TEXT, campaignId);
+        await conversationRepository.applyLeadSignals(fromPhone, {
+          confirmedInterest: true,
+          confirmedUniversity: payload.university || null,
+        });
+        log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent, hasLink: Boolean(link) }, 'meta_reply_intent');
+        return;
+      }
+
+      if (intent === 'not_interested') {
+        await sendReplyText(fromPhone, NOT_INTERESTED_TEXT, campaignId);
+        log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent }, 'meta_reply_intent');
+        return;
+      }
+
+      log.info(
+        { event: 'meta_reply_intent', fromPhone, campaignId, intent: 'unrecognized_button', buttonId },
+        'meta_reply_intent',
+      );
       return;
     }
 
-    if (intent === 'interested') {
-      const payload = parseContactPayload(contactPayloadJson);
-      const link = payload.link != null && String(payload.link).trim() ? String(payload.link).trim() : null;
-      await sendReplyText(fromPhone, link ? interestedText(link) : INTERESTED_NO_LINK_TEXT, campaignId);
-      log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent, hasLink: Boolean(link) }, 'meta_reply_intent');
+    // Free-text reply that isn't answering a pending "which university" prompt — hand off to AI.
+    const aiResult = await aiReplyService.generateReply({ fromPhone, bodyText, contactPayloadJson });
+    if (!aiResult) {
+      log.warn({ event: 'meta_reply_ai_unavailable', fromPhone, campaignId }, 'AI reply unavailable, no response sent');
       return;
     }
 
-    if (intent === 'not_interested') {
-      await sendReplyText(fromPhone, NOT_INTERESTED_TEXT, campaignId);
-      log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent }, 'meta_reply_intent');
-      return;
-    }
-
+    await sendReplyText(fromPhone, aiResult.reply, campaignId, 'ai');
+    await conversationRepository.applyLeadSignals(fromPhone, {
+      confirmedInterest: aiResult.confirmedInterest,
+      confirmedUniversity: aiResult.confirmedUniversity,
+    });
     log.info(
-      { event: 'meta_reply_intent', fromPhone, campaignId, intent: 'unrecognized', messageType, buttonId },
-      'meta_reply_intent',
+      {
+        event: 'meta_reply_ai_generated',
+        fromPhone,
+        campaignId,
+        confirmedInterest: aiResult.confirmedInterest,
+        confirmedUniversity: aiResult.confirmedUniversity,
+        needsHuman: aiResult.needsHuman,
+      },
+      'meta_reply_ai_generated',
     );
   } catch (err) {
     log.warn({ err: err.message, event: 'meta_reply_sequence_failed', fromPhone }, 'Failed to process reply sequence');

@@ -31,7 +31,8 @@ function formatDt(value) {
 
 function MessageBubble({ msg }) {
   const isOutbound = msg.direction === 'outbound';
-  const senderLabel = msg.sender === 'admin' ? 'You' : msg.sender === 'system' ? 'System' : null;
+  const senderLabel =
+    msg.sender === 'admin' ? 'You' : msg.sender === 'ai' ? 'AI' : msg.sender === 'system' ? 'System' : null;
 
   let body = null;
   if (msg.messageType === 'reaction') {
@@ -99,6 +100,7 @@ export default function ChatsPage() {
   const [campaignId, setCampaignId] = useState(initialCampaignId);
   const [deliveryStatus, setDeliveryStatus] = useState('');
   const [unseenOnly, setUnseenOnly] = useState(false);
+  const [qualifiedOnly, setQualifiedOnly] = useState(false);
 
   const [conversations, setConversations] = useState([]);
   const [convLoading, setConvLoading] = useState(true);
@@ -131,6 +133,7 @@ export default function ChatsPage() {
         campaignId,
         deliveryStatus,
         unseen: unseenOnly,
+        qualified: qualifiedOnly,
         page: 1,
         limit: 100,
       });
@@ -140,7 +143,7 @@ export default function ChatsPage() {
     } finally {
       setConvLoading(false);
     }
-  }, [campaignId, deliveryStatus, unseenOnly]);
+  }, [campaignId, deliveryStatus, unseenOnly, qualifiedOnly]);
 
   useEffect(() => {
     loadConversations();
@@ -259,6 +262,17 @@ export default function ChatsPage() {
             >
               Unseen
             </button>
+            <button
+              type="button"
+              className={
+                qualifiedOnly
+                  ? 'campaign-users-modal__filter campaign-users-modal__filter--active'
+                  : 'campaign-users-modal__filter'
+              }
+              onClick={() => setQualifiedOnly((v) => !v)}
+            >
+              Qualified leads
+            </button>
           </div>
         </div>
 
@@ -292,9 +306,25 @@ export default function ChatsPage() {
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{formatDt(c.lastMessageAt)}</span>
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{c.phoneNormalized}</div>
-              {c.campaignName ? (
-                <div style={{ fontSize: '0.7rem', color: 'var(--primary)', marginTop: 2 }}>{c.campaignName}</div>
-              ) : null}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 2 }}>
+                {c.campaignName ? (
+                  <span style={{ fontSize: '0.7rem', color: 'var(--primary)' }}>{c.campaignName}</span>
+                ) : null}
+                {c.leadQualified ? (
+                  <span
+                    style={{
+                      fontSize: '0.65rem',
+                      fontWeight: 600,
+                      color: 'var(--success, #16a34a)',
+                      border: '1px solid var(--success, #16a34a)',
+                      borderRadius: 999,
+                      padding: '0 6px',
+                    }}
+                  >
+                    ✓ Qualified
+                  </span>
+                ) : null}
+              </div>
               <div
                 style={{
                   fontSize: '0.8rem',
@@ -328,6 +358,21 @@ export default function ChatsPage() {
           <>
             <div style={{ padding: '0.75rem', borderBottom: '1px solid var(--border)' }}>
               <strong>{selectedConversation?.displayName || selectedPhone}</strong>
+              {selectedConversation?.leadQualified ? (
+                <span
+                  style={{
+                    fontSize: '0.65rem',
+                    fontWeight: 600,
+                    color: 'var(--success, #16a34a)',
+                    border: '1px solid var(--success, #16a34a)',
+                    borderRadius: 999,
+                    padding: '0 6px',
+                    marginLeft: 8,
+                  }}
+                >
+                  ✓ Qualified{selectedConversation.confirmedUniversity ? ` · ${selectedConversation.confirmedUniversity}` : ''}
+                </span>
+              ) : null}
               <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 {selectedPhone}
                 {selectedConversation?.campaignName ? ` · ${selectedConversation.campaignName}` : ''}

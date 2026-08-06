@@ -302,11 +302,12 @@ export async function deleteUniversityLink(id) {
 }
 
 /** @returns {Promise<{ total: number, conversations: object[], page: number, limit: number }>} */
-export async function listConversations({ campaignId = '', deliveryStatus = '', unseen = false, page = 1, limit = 50 } = {}) {
+export async function listConversations({ campaignId = '', deliveryStatus = '', unseen = false, qualified = false, page = 1, limit = 50 } = {}) {
   const q = new URLSearchParams();
   if (campaignId) q.set('campaignId', campaignId);
   if (deliveryStatus) q.set('deliveryStatus', deliveryStatus);
   if (unseen) q.set('unseen', 'true');
+  if (qualified) q.set('qualified', 'true');
   q.set('page', String(page));
   q.set('limit', String(limit));
   return apiFetch(`/api/conversations?${q}`, { method: 'GET' });

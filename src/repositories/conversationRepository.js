@@ -126,9 +126,45 @@ async function markConversationSeen(phoneNormalized) {
 }
 
 /**
- * @param {{ campaignId?: string|null, deliveryStatus?: string|null, unseenOnly?: boolean, page?: number, limit?: number }} opts
+ * A lead is qualified once both interest and their university have ever been confirmed by the
+ * AI reply service — persisted separately so a signal from an earlier message still counts once
+ * the other one arrives later. Idempotent and one-directional: never un-qualifies a conversation
+ * that already reached that state.
+ * @param {string} phoneNormalized
+ * @param {{ confirmedInterest?: boolean, confirmedUniversity?: string|null }} signals
  */
-async function listConversations({ campaignId, deliveryStatus, unseenOnly, page = 1, limit = 50 } = {}) {
+async function applyLeadSignals(phoneNormalized, { confirmedInterest, confirmedUniversity }) {
+  const phone = String(phoneNormalized || '').trim();
+  if (!phone) return;
+  if (!confirmedInterest && !confirmedUniversity) return;
+
+  const interestFlag = confirmedInterest ? 1 : 0;
+  const university = confirmedUniversity || null;
+
+  await pool.execute(
+    `UPDATE conversations
+     SET confirmed_interest = GREATEST(confirmed_interest, ?),
+         confirmed_university = COALESCE(?, confirmed_university),
+         lead_qualified = CASE
+           WHEN GREATEST(confirmed_interest, ?) = 1 AND COALESCE(?, confirmed_university) IS NOT NULL THEN 1
+           ELSE lead_qualified
+         END,
+         qualified_at = CASE
+           WHEN lead_qualified = 0
+             AND GREATEST(confirmed_interest, ?) = 1
+             AND COALESCE(?, confirmed_university) IS NOT NULL
+             THEN CURRENT_TIMESTAMP
+           ELSE qualified_at
+         END
+     WHERE phone_normalized = ?`,
+    [interestFlag, university, interestFlag, university, interestFlag, university, phone],
+  );
+}
+
+/**
+ * @param {{ campaignId?: string|null, deliveryStatus?: string|null, unseenOnly?: boolean, qualifiedOnly?: boolean, page?: number, limit?: number }} opts
+ */
+async function listConversations({ campaignId, deliveryStatus, unseenOnly, qualifiedOnly, page = 1, limit = 50 } = {}) {
   const lim = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
   const pg = Math.max(1, Math.floor(Number(page) || 1));
   const offset = (pg - 1) * lim;
@@ -142,6 +178,9 @@ async function listConversations({ campaignId, deliveryStatus, unseenOnly, page 
   }
   if (unseenOnly) {
     where.push('(c.last_seen_by_admin_at IS NULL OR c.last_seen_by_admin_at < c.last_message_at)');
+  }
+  if (qualifiedOnly) {
+    where.push('c.lead_qualified = 1');
   }
   if (deliveryStatus) {
     where.push('cc.meta_delivery_status = ?');
@@ -181,6 +220,8 @@ async function listConversations({ campaignId, deliveryStatus, unseenOnly, page 
       campaignName: r.campaign_name,
       metaDeliveryStatus: r.meta_delivery_status,
       isUnseen: Boolean(r.is_unseen),
+      leadQualified: Boolean(r.lead_qualified),
+      confirmedUniversity: r.confirmed_university,
     })),
   };
 }
@@ -245,6 +286,7 @@ async function getReplyCountsByCampaign(campaignId) {
 module.exports = {
   logMessage,
   markConversationSeen,
+  applyLeadSignals,
   listConversations,
   getConversationMessages,
   getReplyCountsByCampaign,

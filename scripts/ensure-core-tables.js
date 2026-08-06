@@ -225,6 +225,8 @@ async function runCoreMigrations() {
   await ensureCampaignMetaTemplateColumn(conn);
   await ensureCampaignContactsMetaDeliveryColumns(conn);
   await ensureMetaTemplatesOptOutButtonColumn(conn);
+  await ensureMetaConfigSupportContactColumn(conn);
+  await ensureConversationsLeadColumns(conn);
 
   await conn.end();
 }
@@ -245,6 +247,48 @@ async function ensureMetaTemplatesOptOutButtonColumn(conn) {
     await conn.query(
       'ALTER TABLE meta_templates ADD COLUMN has_opt_out_button TINYINT(1) NOT NULL DEFAULT 0',
     );
+  }
+}
+
+/** meta_config.support_contact_info — human escalation contact the AI reply service offers when needed. */
+async function ensureMetaConfigSupportContactColumn(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'meta_config' AND COLUMN_NAME = 'support_contact_info'`,
+    [schema],
+  );
+  if (Number(rows[0]?.cnt) === 0) {
+    console.log('MIGRATE: meta_config — adding support_contact_info column');
+    await conn.query('ALTER TABLE meta_config ADD COLUMN support_contact_info TEXT NULL');
+  }
+}
+
+/** conversations lead-qualification columns, set by the AI reply service. */
+async function ensureConversationsLeadColumns(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  const columns = [
+    { name: 'lead_qualified', ddl: 'TINYINT(1) NOT NULL DEFAULT 0' },
+    { name: 'confirmed_interest', ddl: 'TINYINT(1) NOT NULL DEFAULT 0' },
+    { name: 'confirmed_university', ddl: 'VARCHAR(255) NULL DEFAULT NULL' },
+    { name: 'qualified_at', ddl: 'TIMESTAMP NULL DEFAULT NULL' },
+  ];
+  for (const col of columns) {
+    const [rows] = await conn.query(
+      `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'conversations' AND COLUMN_NAME = ?`,
+      [schema, col.name],
+    );
+    if (Number(rows[0]?.cnt) === 0) {
+      console.log(`MIGRATE: conversations — adding ${col.name} column`);
+      await conn.query(`ALTER TABLE conversations ADD COLUMN ${col.name} ${col.ddl}`);
+    }
   }
 }
 

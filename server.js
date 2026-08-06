@@ -458,6 +458,7 @@ function mapMetaConfigRow(row, { maskSecrets = true } = {}) {
     displayName: row.displayName != null ? String(row.displayName) : '',
     wabaId: row.wabaId != null ? String(row.wabaId) : '',
     graphVersion: row.graphVersion != null ? String(row.graphVersion) : '',
+    supportContactInfo: row.support_contact_info != null ? String(row.support_contact_info) : '',
     isEnabled: Number(row.isEnabled) === 1,
     accessTokenMasked: maskSecrets ? maskApiToken(token) : token,
     hasAccessToken: Boolean(token.trim()),
@@ -484,6 +485,7 @@ app.get('/api/meta-config', requireAdmin, async (req, res) => {
             displayName: '',
             wabaId: '',
             graphVersion: '',
+            supportContactInfo: '',
             isEnabled: true,
             accessTokenMasked: '',
             hasAccessToken: false,
@@ -512,6 +514,10 @@ app.put('/api/meta-config', requireAdmin, async (req, res) => {
       body.graphVersion != null && String(body.graphVersion).trim() !== ''
         ? String(body.graphVersion).trim()
         : null;
+    const supportContactInfo =
+      body.supportContactInfo != null && String(body.supportContactInfo).trim() !== ''
+        ? String(body.supportContactInfo).trim()
+        : null;
     const isEnabled = body.isEnabled === false || body.isEnabled === 0 || body.isEnabled === '0' ? 0 : 1;
     const incomingToken = body.accessToken != null ? String(body.accessToken).trim() : '';
 
@@ -530,16 +536,17 @@ app.put('/api/meta-config', requireAdmin, async (req, res) => {
 
     await pool.execute(
       `INSERT INTO meta_config
-        (id, phoneNumberId, accessToken, displayName, wabaId, graphVersion, isEnabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+        (id, phoneNumberId, accessToken, displayName, wabaId, graphVersion, support_contact_info, isEnabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON DUPLICATE KEY UPDATE
          phoneNumberId = VALUES(phoneNumberId),
          accessToken = VALUES(accessToken),
          displayName = VALUES(displayName),
          wabaId = VALUES(wabaId),
          graphVersion = VALUES(graphVersion),
+         support_contact_info = VALUES(support_contact_info),
          isEnabled = VALUES(isEnabled)`,
-      [META_CONFIG_ID, phoneNumberId, accessToken, displayName || null, wabaId, graphVersion, isEnabled],
+      [META_CONFIG_ID, phoneNumberId, accessToken, displayName || null, wabaId, graphVersion, supportContactInfo, isEnabled],
     );
 
     const row = await loadMetaConfigRow();
@@ -810,6 +817,7 @@ app.get('/api/conversations', async (req, res) => {
     const campaignId = req.query.campaignId ? String(req.query.campaignId).trim() : null;
     const deliveryStatus = req.query.deliveryStatus ? String(req.query.deliveryStatus).trim().toLowerCase() : null;
     const unseenOnly = String(req.query.unseen || '').toLowerCase() === 'true';
+    const qualifiedOnly = String(req.query.qualified || '').toLowerCase() === 'true';
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
     const limitRaw = parseInt(String(req.query.limit || '50'), 10);
     const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, limitRaw)) : 50;
@@ -817,6 +825,7 @@ app.get('/api/conversations', async (req, res) => {
       campaignId,
       deliveryStatus,
       unseenOnly,
+      qualifiedOnly,
       page,
       limit,
     });

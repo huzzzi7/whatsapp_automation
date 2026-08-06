@@ -17,6 +17,7 @@ const EMPTY_META_FORM = {
   accessToken: '',
   wabaId: '',
   graphVersion: '',
+  supportContactInfo: '',
   isEnabled: true,
 };
 
@@ -47,6 +48,7 @@ export default function SettingsPage() {
         accessToken: '',
         wabaId: c.wabaId || '',
         graphVersion: c.graphVersion || '',
+        supportContactInfo: c.supportContactInfo || '',
         isEnabled: c.isEnabled !== false,
       });
       setMetaTokenMasked(c.accessTokenMasked || '');
@@ -80,6 +82,7 @@ export default function SettingsPage() {
         phoneNumberId: metaForm.phoneNumberId,
         wabaId: metaForm.wabaId,
         graphVersion: metaForm.graphVersion,
+        supportContactInfo: metaForm.supportContactInfo,
         isEnabled: metaForm.isEnabled,
       };
       if (String(metaForm.accessToken || '').trim()) {
@@ -94,6 +97,7 @@ export default function SettingsPage() {
         accessToken: '',
         wabaId: c.wabaId || '',
         graphVersion: c.graphVersion || '',
+        supportContactInfo: c.supportContactInfo || '',
         isEnabled: c.isEnabled !== false,
       }));
       setMetaTokenMasked(c.accessTokenMasked || '');
@@ -240,6 +244,18 @@ export default function SettingsPage() {
                 value={metaForm.graphVersion}
                 onChange={handleMetaField('graphVersion')}
                 placeholder={metaDefaultGraphVersion}
+              />
+            </div>
+            <div>
+              <label className="ui-input-label" htmlFor="meta-support-contact">
+                Support contact info (used by the AI when a student needs a human)
+              </label>
+              <input
+                id="meta-support-contact"
+                className="ui-input-field"
+                value={metaForm.supportContactInfo}
+                onChange={handleMetaField('supportContactInfo')}
+                placeholder="e.g. call us at +44... or email help@..."
               />
             </div>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
