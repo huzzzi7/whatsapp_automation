@@ -31,7 +31,8 @@ function randomDelayMs() {
  *   contactPayloadJson: string|null, metaMessageId: string|null }} params
  */
 async function scheduleAiReply({ fromPhone, campaignId, bodyText, contactPayloadJson, metaMessageId }) {
-  const jobId = `ai_reply:${fromPhone}`;
+  // BullMQ custom job ids cannot contain ':' (used internally as a Redis key delimiter).
+  const jobId = `ai_reply-${fromPhone}`;
 
   try {
     const existing = await aiReplyQueue.getJob(jobId);
