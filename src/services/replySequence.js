@@ -13,7 +13,7 @@ const {
   clearPendingUniversityRequest,
 } = require('../repositories/pendingRequestRepository');
 const conversationRepository = require('../repositories/conversationRepository');
-const aiReplyService = require('./aiReplyService');
+const aiReplyScheduler = require('./aiReplyScheduler');
 const { classifyReplyIntent } = require('../utils/replyIntent');
 const metaWhatsApp = require('../metaWhatsApp');
 const { createLogger } = require('../utils/logger');
@@ -71,9 +71,9 @@ async function sendReplyText(toPhone, text, campaignId = null, sender = 'system'
 /**
  * @param {{ fromPhone: string, campaignId: string|null, messageType: 'text'|'button',
  *   bodyText: string|null, buttonId: string|null, buttonTitle: string|null,
- *   contactPayloadJson: string|null }} params
+ *   contactPayloadJson: string|null, metaMessageId: string|null }} params
  */
-async function handleReply({ fromPhone, campaignId, messageType, bodyText, buttonId, buttonTitle, contactPayloadJson }) {
+async function handleReply({ fromPhone, campaignId, messageType, bodyText, buttonId, buttonTitle, contactPayloadJson, metaMessageId }) {
   try {
     const awaitingUniversity = await hasPendingUniversityRequest(fromPhone);
     if (awaitingUniversity) {
@@ -129,32 +129,12 @@ async function handleReply({ fromPhone, campaignId, messageType, bodyText, butto
       return;
     }
 
-    // Free-text reply that isn't answering a pending "which university" prompt — hand off to AI.
-    const aiResult = await aiReplyService.generateReply({ fromPhone, bodyText, contactPayloadJson });
-    if (!aiResult) {
-      log.warn({ event: 'meta_reply_ai_unavailable', fromPhone, campaignId }, 'AI reply unavailable, no response sent');
-      return;
-    }
-
-    await sendReplyText(fromPhone, aiResult.reply, campaignId, 'ai');
-    await conversationRepository.applyLeadSignals(fromPhone, {
-      confirmedInterest: aiResult.confirmedInterest,
-      confirmedUniversity: aiResult.confirmedUniversity,
-    });
-    log.info(
-      {
-        event: 'meta_reply_ai_generated',
-        fromPhone,
-        campaignId,
-        confirmedInterest: aiResult.confirmedInterest,
-        confirmedUniversity: aiResult.confirmedUniversity,
-        needsHuman: aiResult.needsHuman,
-      },
-      'meta_reply_ai_generated',
-    );
+    // Free-text reply that isn't answering a pending "which university" prompt — hand off to AI,
+    // with a human-like delay + typing indicator instead of sending instantly (see aiReplyWorker).
+    await aiReplyScheduler.scheduleAiReply({ fromPhone, campaignId, bodyText, contactPayloadJson, metaMessageId });
   } catch (err) {
     log.warn({ err: err.message, event: 'meta_reply_sequence_failed', fromPhone }, 'Failed to process reply sequence');
   }
 }
 
-module.exports = { handleReply };
+module.exports = { handleReply, sendReplyText };

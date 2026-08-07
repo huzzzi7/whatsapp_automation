@@ -1,0 +1,99 @@
+/**
+ * Consumes aiReplyQueue: fires after the human-like delay set by aiReplyScheduler. Shows Meta's
+ * native typing indicator, pauses briefly so it's actually visible to the customer, then
+ * generates and sends the AI reply. Runs in the same process as coordinatorWorker (required from
+ * there) so no extra PM2 process is needed.
+ */
+const { Worker } = require('bullmq');
+const { bullMqConnection, bullMqSkipVersionCheck } = require('./connection');
+const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
+const metaWhatsApp = require('../metaWhatsApp');
+const aiReplyService = require('../services/aiReplyService');
+const conversationRepository = require('../repositories/conversationRepository');
+const { sendReplyText } = require('../services/replySequence');
+const { createLogger } = require('../utils/logger');
+
+const log = createLogger('aiReplyWorker');
+
+function sleepMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, n));
+}
+
+function randomInt(minMs, maxMs) {
+  return Math.floor(minMs + Math.random() * (maxMs - minMs));
+}
+
+async function processAiReplyJob(job) {
+  const { fromPhone, campaignId, bodyText, contactPayloadJson, metaMessageId } = job.data;
+
+  const metaConfig = await getMetaConfigRow();
+  if (!metaConfig || !metaConfig.isEnabled) {
+    log.warn({ event: 'ai_reply_send_skipped_no_config', fromPhone }, 'Meta config missing/disabled, cannot send AI reply');
+    return;
+  }
+
+  if (metaMessageId) {
+    try {
+      await metaWhatsApp.markAsReadWithTyping({
+        phoneNumberId: metaConfig.phoneNumberId,
+        accessToken: metaConfig.accessToken,
+        messageId: metaMessageId,
+        graphVersion: metaConfig.graphVersion || undefined,
+      });
+    } catch (err) {
+      log.warn(
+        { err: err.message, event: 'ai_reply_typing_indicator_failed', fromPhone },
+        'Failed to show typing indicator, continuing without it',
+      );
+    }
+  }
+
+  // Give the typing indicator a moment to actually be visible before the message lands.
+  await sleepMs(randomInt(3000, 8000));
+
+  const aiResult = await aiReplyService.generateReply({ fromPhone, bodyText, contactPayloadJson });
+  if (!aiResult) {
+    log.warn({ event: 'ai_reply_generation_unavailable', fromPhone, campaignId }, 'AI reply unavailable, no response sent');
+    return;
+  }
+
+  await sendReplyText(fromPhone, aiResult.reply, campaignId, 'ai');
+  await conversationRepository.applyLeadSignals(fromPhone, {
+    confirmedInterest: aiResult.confirmedInterest,
+    confirmedUniversity: aiResult.confirmedUniversity,
+  });
+
+  log.info(
+    {
+      event: 'meta_reply_ai_generated',
+      fromPhone,
+      campaignId,
+      confirmedInterest: aiResult.confirmedInterest,
+      confirmedUniversity: aiResult.confirmedUniversity,
+      needsHuman: aiResult.needsHuman,
+    },
+    'meta_reply_ai_generated',
+  );
+}
+
+const aiReplyWorker = new Worker('aiReplyQueue', processAiReplyJob, {
+  connection: bullMqConnection,
+  concurrency: 5,
+  skipVersionCheck: bullMqSkipVersionCheck,
+});
+
+aiReplyWorker.on('error', (err) => log.error({ err: err.message, event: 'ai_reply_worker_error' }, 'aiReplyWorker error'));
+aiReplyWorker.on('failed', (job, err) =>
+  log.error({ err: err.message, bullJobId: job?.id, fromPhone: job?.data?.fromPhone, event: 'ai_reply_job_failed' }, 'AI reply job failed permanently'),
+);
+
+log.info({ event: 'ai_reply_worker_started', queue: 'aiReplyQueue', concurrency: 5 }, 'aiReplyWorker started');
+
+async function closeAiReplyWorker() {
+  await aiReplyWorker.close();
+  log.info({ event: 'ai_reply_worker_closed' }, 'aiReplyWorker closed');
+}
+
+module.exports = { aiReplyWorker, closeAiReplyWorker };

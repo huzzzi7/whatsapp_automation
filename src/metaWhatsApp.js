@@ -165,6 +165,49 @@ async function sendTextMessage({ to, phoneNumberId, accessToken, text, graphVers
 }
 
 /**
+ * Marks an inbound message as read and shows the native WhatsApp "typing..." indicator to the
+ * customer. Meta clears the indicator automatically once a message is sent (or after ~25s,
+ * whichever comes first) — this only needs to be called once, right before actually sending.
+ * @param {{ to?: string, phoneNumberId: string, accessToken: string, messageId: string, graphVersion?: string }} params
+ */
+async function markAsReadWithTyping({ phoneNumberId, accessToken, messageId, graphVersion }) {
+  const phoneNumberIdTrim = phoneNumberId != null ? String(phoneNumberId).trim() : '';
+  const token = accessToken != null ? String(accessToken).trim() : '';
+  const id = messageId != null ? String(messageId).trim() : '';
+  if (!phoneNumberIdTrim || !token) {
+    throw new Error('Meta markAsReadWithTyping requires phoneNumberId and accessToken');
+  }
+  if (!id) {
+    throw new Error('Meta markAsReadWithTyping requires messageId');
+  }
+
+  const url = `${graphBaseUrl(graphVersion)}/${encodeURIComponent(phoneNumberIdTrim)}/messages`;
+  const payload = {
+    messaging_product: 'whatsapp',
+    status: 'read',
+    message_id: id,
+    typing_indicator: { type: 'text' },
+  };
+
+  try {
+    const res = await axios.post(url, payload, {
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      timeout: 15000,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`Meta Graph returned ${res.status}: ${JSON.stringify(res.data)}`);
+    }
+    log.info({ event: 'meta_typing_indicator_sent', messageId: id }, 'meta_typing_indicator_sent');
+    return res.data;
+  } catch (err) {
+    const msg = err.response
+      ? `Meta Graph ${err.response.status}: ${JSON.stringify(err.response.data)}`
+      : err.message;
+    throw new Error(msg);
+  }
+}
+
+/**
  * Health check: fetch phone number metadata from Graph.
  * @param {{ phoneNumberId: string, accessToken: string, graphVersion?: string }} params
  */
@@ -434,6 +477,7 @@ async function sendReaction({ to, phoneNumberId, accessToken, messageId, emoji, 
 module.exports = {
   sendTemplate,
   sendTextMessage,
+  markAsReadWithTyping,
   getPhoneNumber,
   findTemplateByNameAndLanguage,
   templateHasOptOutButton,

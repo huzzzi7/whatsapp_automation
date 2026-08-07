@@ -222,6 +222,7 @@ async function applyInboundMessage(message, displayName) {
       buttonId,
       buttonTitle,
       contactPayloadJson: recentContact?.payloadJson,
+      metaMessageId,
     });
   } catch (err) {
     log.warn({ err: err.message, event: 'meta_webhook_inbound_apply_failed' }, 'Meta webhook: failed to apply inbound message');

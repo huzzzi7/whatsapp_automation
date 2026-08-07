@@ -26,9 +26,16 @@ followupQueue.on('error', (err) => {
   qlog.error({ event: 'queue_error', queue: 'followupQueue', err: err?.message || String(err) }, 'Queue error');
 });
 
+// Delayed, debounced AI free-text reply sends (human-like delay + typing indicator).
+const aiReplyQueue = new Queue('aiReplyQueue', queueOpts);
+
+aiReplyQueue.on('error', (err) => {
+  qlog.error({ event: 'queue_error', queue: 'aiReplyQueue', err: err?.message || String(err) }, 'Queue error');
+});
+
 qlog.info(
-  { event: 'queues_initialized', queues: ['followupQueue'] },
+  { event: 'queues_initialized', queues: ['followupQueue', 'aiReplyQueue'] },
   'BullMQ queues initialized',
 );
 
-module.exports = { followupQueue };
+module.exports = { followupQueue, aiReplyQueue };
