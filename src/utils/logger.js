@@ -17,7 +17,18 @@ const rootLevel = DEBUG_LOGS ? 'debug' : 'info';
 const isProduction = process.env.NODE_ENV === 'production';
 const usePrettyConsole = !isProduction && process.stdout.isTTY;
 
-const fileStream = rfs.createStream('app.log', {
+// server and coordinatorWorker run as separate PM2 processes. Two independent
+// rotating-file-stream instances pointed at the same file race each other on rotation (each
+// renames app.log -> a timestamped file on its own schedule, with no coordination) — this was
+// silently losing chunks of log history (confirmed: a campaign send with ~2000 expected log lines
+// left only a 12KB rotated file, and one rotation produced an empty 0-byte file elsewhere).
+// Only the main server entrypoint keeps the plain "app.log" name (preserves existing tooling that
+// targets it, e.g. scripts/tail-app-log.js); every other entrypoint gets its own file so there is
+// never more than one writer rotating a given path.
+const entryBase = path.basename(process.argv[1] || 'app', '.js');
+const logFileName = entryBase === 'server' ? 'app.log' : `app-${entryBase}.log`;
+
+const fileStream = rfs.createStream(logFileName, {
   interval: '1d',
   path: LOG_DIR,
   size: '15M',
