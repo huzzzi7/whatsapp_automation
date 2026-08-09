@@ -84,6 +84,22 @@ async function processAiReplyJob(job) {
     scriptOverride = ticketLink ? 'interested_ticket_link' : 'interested_no_link';
   }
 
+  // Safety net: the model is instructed to only re-confirm signals on the message that newly
+  // states them, but if it slips and re-emits an already-sent signal (e.g. after "thanks"), don't
+  // let that resend the identical scripted message — fall back to the model's own natural reply.
+  if (scriptOverride) {
+    const recentHistory = await conversationRepository.getConversationMessages(fromPhone, { limit: 5 });
+    const lastOutbound = [...recentHistory].reverse().find((m) => m.direction === 'outbound');
+    if (lastOutbound && lastOutbound.bodyText === finalReply) {
+      log.info(
+        { event: 'ai_reply_override_deduped', fromPhone, campaignId, scriptOverride },
+        'Scripted reply matches the last outbound message, sending AI reply instead to avoid a duplicate',
+      );
+      finalReply = aiResult.reply;
+      scriptOverride = null;
+    }
+  }
+
   await sendReplyText(fromPhone, finalReply, campaignId, 'ai');
   await conversationRepository.applyLeadSignals(fromPhone, {
     confirmedInterest: aiResult.confirmedInterest,
