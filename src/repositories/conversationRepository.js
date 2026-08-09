@@ -185,6 +185,12 @@ async function listConversations({ campaignId, deliveryStatus, unseenOnly, quali
   if (deliveryStatus) {
     where.push('cc.meta_delivery_status = ?');
     params.push(deliveryStatus);
+  } else {
+    // Default ("All") view: hide contacts whose only send attempt failed — a conversation row is
+    // created optimistically when Meta *accepts* a template send, but the real failure (recipient
+    // not reachable, etc.) only arrives later via webhook and would otherwise leave a dead thread
+    // sitting in the list forever. Explicitly filtering to 'failed' still shows them.
+    where.push("(cc.meta_delivery_status IS NULL OR cc.meta_delivery_status != 'failed')");
   }
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
