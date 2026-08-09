@@ -16,33 +16,18 @@ const conversationRepository = require('../repositories/conversationRepository')
 const aiReplyScheduler = require('./aiReplyScheduler');
 const { classifyReplyIntent } = require('../utils/replyIntent');
 const metaWhatsApp = require('../metaWhatsApp');
+const { parseContactPayload } = require('../utils/contactPayload');
+const {
+  ASK_WHICH_UNIVERSITY_TEXT,
+  NOT_INTERESTED_TEXT,
+  UNIVERSITY_LINK_NOT_FOUND_TEXT,
+  INTERESTED_NO_LINK_TEXT,
+  universityLinkFoundText,
+  interestedText,
+} = require('../utils/scriptedReplies');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('metaWebhook');
-
-const ASK_WHICH_UNIVERSITY_TEXT = 'Which university are you going to?';
-const NOT_INTERESTED_TEXT =
-  "No problem, if you need anything related to your university Freshers' Week, let us know 🙂";
-const UNIVERSITY_LINK_NOT_FOUND_TEXT = "Thanks — we'll find that group for you and follow up shortly.";
-const INTERESTED_NO_LINK_TEXT = "Let us know and we'll send you the link to buy your official freshers week tickets.";
-
-function universityLinkFoundText(link) {
-  return `Here's the link ${link} for you to join, if you need anything else let us know.`;
-}
-
-function interestedText(link) {
-  return `Buy the official freshers week tickets for your university here ${link}`;
-}
-
-function parseContactPayload(payloadJson) {
-  if (payloadJson == null || payloadJson === '') return {};
-  try {
-    const obj = typeof payloadJson === 'string' ? JSON.parse(payloadJson) : payloadJson;
-    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
-  } catch {
-    return {};
-  }
-}
 
 async function sendReplyText(toPhone, text, campaignId = null, sender = 'system') {
   const metaConfig = await getMetaConfigRow();

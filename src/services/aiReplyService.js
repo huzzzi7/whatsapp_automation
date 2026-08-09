@@ -7,6 +7,8 @@
 const OpenAIModule = require('openai');
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
 const { getConversationMessages } = require('../repositories/conversationRepository');
+const { parseContactPayload } = require('../utils/contactPayload');
+const { ASK_WHICH_UNIVERSITY_TEXT } = require('../utils/scriptedReplies');
 const { createLogger } = require('../utils/logger');
 
 const OpenAI = OpenAIModule.default || OpenAIModule;
@@ -21,16 +23,6 @@ function getClient() {
   return client;
 }
 
-function parseContactPayload(payloadJson) {
-  if (payloadJson == null || payloadJson === '') return {};
-  try {
-    const obj = typeof payloadJson === 'string' ? JSON.parse(payloadJson) : payloadJson;
-    return obj && typeof obj === 'object' && !Array.isArray(obj) ? obj : {};
-  } catch {
-    return {};
-  }
-}
-
 function buildSystemPrompt({ university, groupLink, ticketLink, supportContactInfo }) {
   const facts = [];
   if (university) facts.push(`Their university: ${university}`);
@@ -41,6 +33,7 @@ function buildSystemPrompt({ university, groupLink, ticketLink, supportContactIn
     "You are a member of the Student Help Council team, texting a new university student on WhatsApp to help with Freshers' Week — joining their course/accommodation group chat, getting official Freshers' Week tickets, and answering questions about their course or upcoming events.",
     'Write like a real person texting: short, warm, casual, no corporate tone, no signing off with a name. Do not volunteer that you are an AI, bot, or automated system. If someone directly asks whether you are a bot/AI/real person, do not flatly announce that you are an AI — give a brief, low-key, natural answer (e.g. that you are part of the team helping out) and steer straight back to helping them, without being evasive or dishonest about it if pressed further.',
     "IMPORTANT — do not repeat yourself: never resend a link or repeat information you already gave earlier in this conversation (check the message history) unless the student explicitly asks for it again or asks a genuinely new question about it. If their message is just a short acknowledgment (e.g. \"ok\", \"thanks\", \"cool\", \"got it\") and nothing is unresolved, do not repeat previous info — just close the loop briefly and ask if they have any questions about their course, accommodation, or upcoming Freshers' Week events.",
+    `IMPORTANT — different university: if the student says they're going to a different/another university than the one listed in "known facts" below but does not name which one, ask them exactly: "${ASK_WHICH_UNIVERSITY_TEXT}" — do not just acknowledge it and move on, and do not guess a university. Once they DO name a university (in this message or an earlier one), always set "confirmedUniversity" to that name — a separate system already looks up the correct group link for it and overrides your reply text before sending, so do not write out a link or invent one yourself for a university that isn't in your known facts.`,
     'Only state facts you have been given below — never invent a link, price, date, or detail you do not have.',
     facts.length
       ? `Known facts about this student:\n${facts.join('\n')}`

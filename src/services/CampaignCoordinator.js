@@ -9,6 +9,7 @@ const {
   promoteQueuedCampaignToRunningIfDue,
 } = require('../repositories/campaignRepository');
 const { runCampaignWorker } = require('./CampaignWorker');
+const { acquireCampaignWorkerLock } = require('./campaignWorkerLock');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('worker');
@@ -32,6 +33,21 @@ function kickWorker(campaignId) {
   activeWorkerKeys.add(key);
   log.debug({ event: 'worker_kick', campaignId }, 'worker_kick');
   (async () => {
+    // activeWorkerKeys only guards within this process — server and coordinatorWorker are
+    // separate processes with separate memory, so a Redis lock is what actually stops both from
+    // running the same campaign's send loop at once (see campaignWorkerLock.js).
+    const lock = await acquireCampaignWorkerLock(campaignId);
+    if (!lock) {
+      // Another process already owns this campaign's send loop (or Redis was unreachable) — free
+      // the key without rescheduling, so this doesn't busy-loop retrying every tick; the process
+      // actually running it will drive progress, and the next external tick/action picks up here.
+      log.debug(
+        { event: 'worker_kick_lock_held_elsewhere', campaignId },
+        'Another process already holds the campaign worker lock, skipping',
+      );
+      activeWorkerKeys.delete(key);
+      return;
+    }
     try {
       await runCampaignWorker(campaignId);
     } catch (err) {
@@ -46,6 +62,7 @@ function kickWorker(campaignId) {
         });
       }
     } finally {
+      await lock.release();
       activeWorkerKeys.delete(key);
       scheduleTryRunNext();
     }

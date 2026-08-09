@@ -7,10 +7,18 @@
 const { Worker } = require('bullmq');
 const { bullMqConnection, bullMqSkipVersionCheck } = require('./connection');
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
+const { findUniversityLink } = require('../repositories/universityLinkRepository');
 const metaWhatsApp = require('../metaWhatsApp');
 const aiReplyService = require('../services/aiReplyService');
 const conversationRepository = require('../repositories/conversationRepository');
 const { sendReplyText } = require('../services/replySequence');
+const { parseContactPayload } = require('../utils/contactPayload');
+const {
+  UNIVERSITY_LINK_NOT_FOUND_TEXT,
+  INTERESTED_NO_LINK_TEXT,
+  universityLinkFoundText,
+  interestedText,
+} = require('../utils/scriptedReplies');
 const { createLogger } = require('../utils/logger');
 
 const log = createLogger('aiReplyWorker');
@@ -59,7 +67,24 @@ async function processAiReplyJob(job) {
     return;
   }
 
-  await sendReplyText(fromPhone, aiResult.reply, campaignId, 'ai');
+  // The AI only extracts *signals* (confirmedUniversity / confirmedInterest) reliably — the exact
+  // Message 2 script wording and the actual group/ticket link lookup are done here deterministically,
+  // the same way the button-driven path does it, rather than trusting the model's own paraphrase
+  // or letting it invent a link for a university it wasn't given.
+  let finalReply = aiResult.reply;
+  let scriptOverride = null;
+  if (aiResult.confirmedUniversity) {
+    const link = await findUniversityLink(aiResult.confirmedUniversity);
+    finalReply = link ? universityLinkFoundText(link) : UNIVERSITY_LINK_NOT_FOUND_TEXT;
+    scriptOverride = link ? 'different_uni_link_found' : 'different_uni_link_not_found';
+  } else if (aiResult.confirmedInterest) {
+    const payload = parseContactPayload(contactPayloadJson);
+    const ticketLink = payload.link != null && String(payload.link).trim() ? String(payload.link).trim() : null;
+    finalReply = ticketLink ? interestedText(ticketLink) : INTERESTED_NO_LINK_TEXT;
+    scriptOverride = ticketLink ? 'interested_ticket_link' : 'interested_no_link';
+  }
+
+  await sendReplyText(fromPhone, finalReply, campaignId, 'ai');
   await conversationRepository.applyLeadSignals(fromPhone, {
     confirmedInterest: aiResult.confirmedInterest,
     confirmedUniversity: aiResult.confirmedUniversity,
@@ -73,6 +98,7 @@ async function processAiReplyJob(job) {
       confirmedInterest: aiResult.confirmedInterest,
       confirmedUniversity: aiResult.confirmedUniversity,
       needsHuman: aiResult.needsHuman,
+      scriptOverride,
     },
     'meta_reply_ai_generated',
   );
