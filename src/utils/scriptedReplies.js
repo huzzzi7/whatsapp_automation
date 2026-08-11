@@ -17,6 +17,19 @@ function interestedText(link) {
   return `Buy the official freshers week tickets for your university here ${link}`;
 }
 
+/**
+ * A name like "Leeds" or "Cardiff" genuinely matches several distinct real universities — rather
+ * than silently guessing one, ask exactly which, listing the real candidate names so the reply is
+ * easy to answer precisely.
+ * @param {{universityName: string}[]} candidates
+ */
+function universityDisambiguationText(candidates) {
+  const names = candidates.map((c) => c.universityName);
+  const list =
+    names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}` : names[0];
+  return `Just to double check — which one do you mean: ${list}?`;
+}
+
 module.exports = {
   ASK_WHICH_UNIVERSITY_TEXT,
   NOT_INTERESTED_TEXT,
@@ -24,4 +37,5 @@ module.exports = {
   INTERESTED_NO_LINK_TEXT,
   universityLinkFoundText,
   interestedText,
+  universityDisambiguationText,
 };

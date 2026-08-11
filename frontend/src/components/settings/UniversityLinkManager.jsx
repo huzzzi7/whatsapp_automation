@@ -7,7 +7,7 @@ import {
   deleteUniversityLink,
 } from '../../api';
 
-const EMPTY_FORM = { universityName: '', groupLink: '' };
+const EMPTY_FORM = { universityName: '', groupLink: '', ticketLink: '' };
 
 export default function UniversityLinkManager() {
   const [links, setLinks] = useState([]);
@@ -37,7 +37,7 @@ export default function UniversityLinkManager() {
 
   const startEdit = (l) => {
     setEditingId(l.id);
-    setForm({ universityName: l.universityName, groupLink: l.groupLink });
+    setForm({ universityName: l.universityName, groupLink: l.groupLink || '', ticketLink: l.ticketLink || '' });
     setMessage('');
     setError('');
   };
@@ -61,9 +61,10 @@ export default function UniversityLinkManager() {
       const payload = {
         universityName: form.universityName.trim(),
         groupLink: form.groupLink.trim(),
+        ticketLink: form.ticketLink.trim(),
       };
-      if (!payload.universityName || !payload.groupLink) {
-        setError('University name and group link are required.');
+      if (!payload.universityName || (!payload.groupLink && !payload.ticketLink)) {
+        setError('University name and at least one of group link / ticket link are required.');
         return;
       }
       if (editingId) {
@@ -125,6 +126,7 @@ export default function UniversityLinkManager() {
               <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}>
                 <th style={{ padding: '0.4rem 0.6rem' }}>University</th>
                 <th style={{ padding: '0.4rem 0.6rem' }}>Group link</th>
+                <th style={{ padding: '0.4rem 0.6rem' }}>Ticket link</th>
                 <th style={{ padding: '0.4rem 0.6rem' }}></th>
               </tr>
             </thead>
@@ -133,9 +135,22 @@ export default function UniversityLinkManager() {
                 <tr key={l.id} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '0.4rem 0.6rem' }}>{l.universityName}</td>
                   <td style={{ padding: '0.4rem 0.6rem', wordBreak: 'break-all' }}>
-                    <a href={l.groupLink} target="_blank" rel="noreferrer">
-                      {l.groupLink}
-                    </a>
+                    {l.groupLink ? (
+                      <a href={l.groupLink} target="_blank" rel="noreferrer">
+                        {l.groupLink}
+                      </a>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                    )}
+                  </td>
+                  <td style={{ padding: '0.4rem 0.6rem', wordBreak: 'break-all' }}>
+                    {l.ticketLink ? (
+                      <a href={l.ticketLink} target="_blank" rel="noreferrer">
+                        {l.ticketLink}
+                      </a>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                    )}
                   </td>
                   <td style={{ padding: '0.4rem 0.6rem', whiteSpace: 'nowrap' }}>
                     <Button
@@ -193,6 +208,18 @@ export default function UniversityLinkManager() {
             value={form.groupLink}
             onChange={handleField('groupLink')}
             placeholder="https://chat.whatsapp.com/..."
+          />
+        </div>
+        <div>
+          <label className="ui-input-label" htmlFor="university-link-ticket">
+            Ticket link
+          </label>
+          <input
+            id="university-link-ticket"
+            className="ui-input-field"
+            value={form.ticketLink}
+            onChange={handleField('ticketLink')}
+            placeholder="https://fatso.ma/..."
           />
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>

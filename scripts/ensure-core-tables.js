@@ -118,7 +118,8 @@ const DDL = {
   university_links: `CREATE TABLE IF NOT EXISTS university_links (
   id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
   university_name VARCHAR(255) NOT NULL,
-  group_link VARCHAR(500) NOT NULL,
+  group_link VARCHAR(500) NULL DEFAULT NULL,
+  ticket_link VARCHAR(500) NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uk_university_links_name (university_name)
@@ -227,6 +228,7 @@ async function runCoreMigrations() {
   await ensureMetaTemplatesOptOutButtonColumn(conn);
   await ensureMetaConfigSupportContactColumn(conn);
   await ensureConversationsLeadColumns(conn);
+  await ensureUniversityLinksTicketColumn(conn);
 
   await conn.end();
 }
@@ -387,6 +389,35 @@ async function ensureCampaignContactsMetaDeliveryColumns(conn) {
     await conn.query(
       'ALTER TABLE campaign_contacts ADD KEY idx_campaign_contacts_meta_message_id (meta_message_id)',
     );
+  }
+}
+
+/** university_links.ticket_link — Freshers' Week ticket link per university (group_link was the only link stored before). */
+async function ensureUniversityLinksTicketColumn(conn) {
+  const [dbRows] = await conn.query('SELECT DATABASE() AS d');
+  const schema = dbRows[0]?.d;
+  if (!schema) return;
+
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS cnt FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'university_links' AND COLUMN_NAME = 'ticket_link'`,
+    [schema],
+  );
+  if (Number(rows[0]?.cnt) === 0) {
+    console.log('MIGRATE: university_links — adding ticket_link column');
+    await conn.query('ALTER TABLE university_links ADD COLUMN ticket_link VARCHAR(500) NULL DEFAULT NULL');
+  }
+
+  // Some universities only have a ticket link and no group link in the source sheet (e.g.
+  // University of York) — the original column was NOT NULL, which would reject those rows.
+  const [groupLinkCol] = await conn.query(
+    `SELECT IS_NULLABLE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'university_links' AND COLUMN_NAME = 'group_link'`,
+    [schema],
+  );
+  if (groupLinkCol[0]?.IS_NULLABLE === 'NO') {
+    console.log('MIGRATE: university_links — relaxing group_link to nullable');
+    await conn.query('ALTER TABLE university_links MODIFY COLUMN group_link VARCHAR(500) NULL DEFAULT NULL');
   }
 }
 

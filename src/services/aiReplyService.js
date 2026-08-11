@@ -6,7 +6,8 @@
  */
 const OpenAIModule = require('openai');
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
-const { getConversationMessages } = require('../repositories/conversationRepository');
+const { getConversationMessages, getConversationByPhone } = require('../repositories/conversationRepository');
+const { findUniversityLinkExact } = require('../repositories/universityLinkRepository');
 const { parseContactPayload } = require('../utils/contactPayload');
 const { ASK_WHICH_UNIVERSITY_TEXT } = require('../utils/scriptedReplies');
 const { createLogger } = require('../utils/logger');
@@ -64,6 +65,24 @@ async function generateReply({ fromPhone, bodyText, contactPayloadJson }) {
   const metaConfig = await getMetaConfigRow();
   const payload = parseContactPayload(contactPayloadJson);
 
+  // Default to the facts from the original campaign upload (whichever university this contact was
+  // first messaged about). If the student has since confirmed a DIFFERENT university earlier in
+  // this conversation, use THAT university's own group/ticket links instead — otherwise the AI's
+  // natural (non-scripted) answers keep citing the wrong campus's info, as happened for tickets.
+  let university = payload.university;
+  let groupLink = payload.group;
+  let ticketLink = payload.link;
+
+  const conv = await getConversationByPhone(fromPhone);
+  if (conv?.confirmedUniversity) {
+    const confirmed = await findUniversityLinkExact(conv.confirmedUniversity);
+    if (confirmed) {
+      university = confirmed.universityName;
+      groupLink = confirmed.groupLink || groupLink;
+      ticketLink = confirmed.ticketLink || ticketLink;
+    }
+  }
+
   const history = await getConversationMessages(fromPhone, { limit: 10 });
   const historyMessages = history
     .map((m) => ({
@@ -73,9 +92,9 @@ async function generateReply({ fromPhone, bodyText, contactPayloadJson }) {
     .filter((m) => m.content);
 
   const systemPrompt = buildSystemPrompt({
-    university: payload.university,
-    groupLink: payload.group,
-    ticketLink: payload.link,
+    university,
+    groupLink,
+    ticketLink,
     supportContactInfo: metaConfig?.supportContactInfo,
   });
 

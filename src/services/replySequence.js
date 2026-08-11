@@ -6,7 +6,7 @@
  * separate template approval.
  */
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
-const { findUniversityLink } = require('../repositories/universityLinkRepository');
+const { findUniversityLinkCandidates } = require('../repositories/universityLinkRepository');
 const {
   hasPendingUniversityRequest,
   setPendingUniversityRequest,
@@ -24,6 +24,7 @@ const {
   INTERESTED_NO_LINK_TEXT,
   universityLinkFoundText,
   interestedText,
+  universityDisambiguationText,
 } = require('../utils/scriptedReplies');
 const { createLogger } = require('../utils/logger');
 
@@ -62,18 +63,34 @@ async function handleReply({ fromPhone, campaignId, messageType, bodyText, butto
   try {
     const awaitingUniversity = await hasPendingUniversityRequest(fromPhone);
     if (awaitingUniversity) {
-      await clearPendingUniversityRequest(fromPhone);
       const universityName = bodyText != null ? String(bodyText).trim() : '';
-      const link = await findUniversityLink(universityName);
-      await sendReplyText(fromPhone, link ? universityLinkFoundText(link) : UNIVERSITY_LINK_NOT_FOUND_TEXT, campaignId);
+      const candidates = await findUniversityLinkCandidates(universityName);
+
+      if (candidates.length > 1) {
+        // Genuinely ambiguous (e.g. "Leeds" matches 5 real universities) — ask which one instead
+        // of silently guessing, and stay in the same pending state for their next reply.
+        await sendReplyText(fromPhone, universityDisambiguationText(candidates), campaignId);
+        log.info(
+          { event: 'meta_reply_different_uni_ambiguous', fromPhone, campaignId, universityName, candidateCount: candidates.length },
+          'meta_reply_different_uni_ambiguous',
+        );
+        return;
+      }
+
+      await clearPendingUniversityRequest(fromPhone);
+      const match = candidates[0] || null;
+      const text = match
+        ? (match.groupLink ? universityLinkFoundText(match.groupLink) : UNIVERSITY_LINK_NOT_FOUND_TEXT)
+        : UNIVERSITY_LINK_NOT_FOUND_TEXT;
+      await sendReplyText(fromPhone, text, campaignId);
       if (universityName) {
         await conversationRepository.applyLeadSignals(fromPhone, {
           confirmedInterest: true,
-          confirmedUniversity: universityName,
+          confirmedUniversity: match ? match.universityName : universityName,
         });
       }
       log.info(
-        { event: 'meta_reply_different_uni_answered', fromPhone, campaignId, universityName, matched: Boolean(link) },
+        { event: 'meta_reply_different_uni_answered', fromPhone, campaignId, universityName, matched: Boolean(match) },
         'meta_reply_different_uni_answered',
       );
       return;

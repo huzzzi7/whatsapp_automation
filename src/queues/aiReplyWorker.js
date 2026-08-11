@@ -7,7 +7,7 @@
 const { Worker } = require('bullmq');
 const { bullMqConnection, bullMqSkipVersionCheck } = require('./connection');
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
-const { findUniversityLink } = require('../repositories/universityLinkRepository');
+const { findUniversityLinkCandidates, findUniversityLinkExact } = require('../repositories/universityLinkRepository');
 const metaWhatsApp = require('../metaWhatsApp');
 const aiReplyService = require('../services/aiReplyService');
 const conversationRepository = require('../repositories/conversationRepository');
@@ -18,6 +18,7 @@ const {
   INTERESTED_NO_LINK_TEXT,
   universityLinkFoundText,
   interestedText,
+  universityDisambiguationText,
 } = require('../utils/scriptedReplies');
 const { createLogger } = require('../utils/logger');
 
@@ -31,6 +32,43 @@ function sleepMs(ms) {
 
 function randomInt(minMs, maxMs) {
   return Math.floor(minMs + Math.random() * (maxMs - minMs));
+}
+
+function sameUniversity(a, b) {
+  return Boolean(a) && Boolean(b) && String(a).toLowerCase() === String(b).toLowerCase();
+}
+
+/**
+ * Decides what a freshly AI-extracted university name should actually do, against whatever this
+ * conversation has already confirmed:
+ *  - 'not_found': no stored university matches this name at all.
+ *  - 'ambiguous': the name matches multiple real universities (e.g. "Leeds" matches 5) and none of
+ *    them is already this conversation's confirmed one — ask which, don't touch anything stored.
+ *  - 'transition': resolves to exactly one university that's NEW (different from — or nothing was
+ *    — already confirmed) — this is the moment to send the group link and store it.
+ *  - 'same': resolves to the university already confirmed earlier in this conversation — there's
+ *    nothing new to announce, so the AI's own (now fact-corrected) reply should stand instead of
+ *    resending the scripted link again.
+ * @param {{confirmedUniversity: string|null}|null} conv
+ * @param {string} rawName
+ */
+async function resolveUniversitySignal(conv, rawName) {
+  const candidates = await findUniversityLinkCandidates(rawName);
+  if (candidates.length === 0) {
+    return { action: 'not_found', rawName };
+  }
+  if (candidates.length === 1) {
+    const university = candidates[0];
+    return { action: sameUniversity(conv?.confirmedUniversity, university.universityName) ? 'same' : 'transition', university };
+  }
+  // Ambiguous — but if one of the candidates is already this conversation's confirmed university,
+  // treat a vaguer re-mention (e.g. bare "Leeds" after "University of Leeds" was already settled)
+  // as still referring to that one, rather than re-asking or risking a different arbitrary pick.
+  const already = conv?.confirmedUniversity
+    ? candidates.find((c) => sameUniversity(c.universityName, conv.confirmedUniversity))
+    : null;
+  if (already) return { action: 'same', university: already };
+  return { action: 'ambiguous', candidates };
 }
 
 async function processAiReplyJob(job) {
@@ -67,26 +105,58 @@ async function processAiReplyJob(job) {
     return;
   }
 
+  const conv = await conversationRepository.getConversationByPhone(fromPhone);
+
   // The AI only extracts *signals* (confirmedUniversity / confirmedInterest) reliably — the exact
   // Message 2 script wording and the actual group/ticket link lookup are done here deterministically,
   // the same way the button-driven path does it, rather than trusting the model's own paraphrase
   // or letting it invent a link for a university it wasn't given.
   let finalReply = aiResult.reply;
   let scriptOverride = null;
+  const leadSignals = { confirmedInterest: aiResult.confirmedInterest, confirmedUniversity: aiResult.confirmedUniversity };
+
   if (aiResult.confirmedUniversity) {
-    const link = await findUniversityLink(aiResult.confirmedUniversity);
-    finalReply = link ? universityLinkFoundText(link) : UNIVERSITY_LINK_NOT_FOUND_TEXT;
-    scriptOverride = link ? 'different_uni_link_found' : 'different_uni_link_not_found';
-  } else if (aiResult.confirmedInterest) {
-    const payload = parseContactPayload(contactPayloadJson);
-    const ticketLink = payload.link != null && String(payload.link).trim() ? String(payload.link).trim() : null;
+    const resolution = await resolveUniversitySignal(conv, aiResult.confirmedUniversity);
+
+    if (resolution.action === 'ambiguous') {
+      finalReply = universityDisambiguationText(resolution.candidates);
+      scriptOverride = 'different_uni_ambiguous';
+      leadSignals.confirmedUniversity = null; // don't store an unresolved name
+    } else if (resolution.action === 'transition') {
+      finalReply = resolution.university.groupLink
+        ? universityLinkFoundText(resolution.university.groupLink)
+        : UNIVERSITY_LINK_NOT_FOUND_TEXT;
+      scriptOverride = resolution.university.groupLink ? 'different_uni_link_found' : 'different_uni_link_not_found';
+      leadSignals.confirmedUniversity = resolution.university.universityName; // canonical name, not raw AI text
+    } else if (resolution.action === 'same') {
+      // Already confirmed and unchanged — nothing new to send; let the AI's own reply stand (its
+      // facts now reflect this confirmed university, see aiReplyService.js).
+      leadSignals.confirmedUniversity = resolution.university.universityName;
+    } else {
+      // not_found — no link to send, but still record the raw name so admins can see unmet demand.
+      leadSignals.confirmedUniversity = resolution.rawName;
+    }
+  }
+
+  if (!scriptOverride && aiResult.confirmedInterest && !conv?.confirmedInterest) {
+    // Newly confirming interest for the first time this conversation — send the ticket link.
+    // Prefer the confirmed university's own ticket link over the original campaign contact's,
+    // since the student may have already told us they're going somewhere else.
+    let ticketLink = null;
+    if (conv?.confirmedUniversity) {
+      const confirmedUni = await findUniversityLinkExact(conv.confirmedUniversity);
+      ticketLink = confirmedUni?.ticketLink || null;
+    }
+    if (!ticketLink) {
+      const payload = parseContactPayload(contactPayloadJson);
+      ticketLink = payload.link != null && String(payload.link).trim() ? String(payload.link).trim() : null;
+    }
     finalReply = ticketLink ? interestedText(ticketLink) : INTERESTED_NO_LINK_TEXT;
     scriptOverride = ticketLink ? 'interested_ticket_link' : 'interested_no_link';
   }
 
-  // Safety net: the model is instructed to only re-confirm signals on the message that newly
-  // states them, but if it slips and re-emits an already-sent signal (e.g. after "thanks"), don't
-  // let that resend the identical scripted message — fall back to the model's own natural reply.
+  // Safety net: even with the transition-only logic above, if a scripted reply happens to match
+  // the last outbound message verbatim, don't send it again — fall back to the AI's own reply.
   if (scriptOverride) {
     const recentHistory = await conversationRepository.getConversationMessages(fromPhone, { limit: 5 });
     const lastOutbound = [...recentHistory].reverse().find((m) => m.direction === 'outbound');
@@ -101,10 +171,7 @@ async function processAiReplyJob(job) {
   }
 
   await sendReplyText(fromPhone, finalReply, campaignId, 'ai');
-  await conversationRepository.applyLeadSignals(fromPhone, {
-    confirmedInterest: aiResult.confirmedInterest,
-    confirmedUniversity: aiResult.confirmedUniversity,
-  });
+  await conversationRepository.applyLeadSignals(fromPhone, leadSignals);
 
   log.info(
     {
@@ -112,7 +179,7 @@ async function processAiReplyJob(job) {
       fromPhone,
       campaignId,
       confirmedInterest: aiResult.confirmedInterest,
-      confirmedUniversity: aiResult.confirmedUniversity,
+      confirmedUniversity: leadSignals.confirmedUniversity,
       needsHuman: aiResult.needsHuman,
       scriptOverride,
     },

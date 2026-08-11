@@ -763,10 +763,11 @@ app.post('/api/university-links', requireAdmin, async (req, res) => {
     const body = req.body || {};
     const universityName = body.universityName != null ? String(body.universityName).trim() : '';
     const groupLink = body.groupLink != null ? String(body.groupLink).trim() : '';
-    if (!universityName || !groupLink) {
-      return res.status(400).json({ success: false, error: 'universityName and groupLink are required.' });
+    const ticketLink = body.ticketLink != null ? String(body.ticketLink).trim() : '';
+    if (!universityName || (!groupLink && !ticketLink)) {
+      return res.status(400).json({ success: false, error: 'universityName and at least one of groupLink/ticketLink are required.' });
     }
-    const link = await universityLinkRepository.createUniversityLink({ universityName, groupLink });
+    const link = await universityLinkRepository.createUniversityLink({ universityName, groupLink, ticketLink });
     return res.json({ success: true, link });
   } catch (err) {
     console.error('[University links create]', err);
@@ -779,10 +780,11 @@ app.put('/api/university-links/:id', requireAdmin, async (req, res) => {
     const body = req.body || {};
     const universityName = body.universityName != null ? String(body.universityName).trim() : '';
     const groupLink = body.groupLink != null ? String(body.groupLink).trim() : '';
-    if (!universityName || !groupLink) {
-      return res.status(400).json({ success: false, error: 'universityName and groupLink are required.' });
+    const ticketLink = body.ticketLink != null ? String(body.ticketLink).trim() : '';
+    if (!universityName || (!groupLink && !ticketLink)) {
+      return res.status(400).json({ success: false, error: 'universityName and at least one of groupLink/ticketLink are required.' });
     }
-    const link = await universityLinkRepository.updateUniversityLink(req.params.id, { universityName, groupLink });
+    const link = await universityLinkRepository.updateUniversityLink(req.params.id, { universityName, groupLink, ticketLink });
     if (!link) {
       return res.status(404).json({ success: false, error: 'University link not found.' });
     }

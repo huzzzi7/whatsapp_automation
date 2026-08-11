@@ -116,6 +116,26 @@ async function logMessage(params) {
   return affected;
 }
 
+/**
+ * @param {string} phoneNormalized
+ * @returns {Promise<{ confirmedInterest: boolean, confirmedUniversity: string|null, leadQualified: boolean }|null>}
+ */
+async function getConversationByPhone(phoneNormalized) {
+  const phone = String(phoneNormalized || '').trim();
+  if (!phone) return null;
+  const [rows] = await pool.execute(
+    'SELECT confirmed_interest, confirmed_university, lead_qualified FROM conversations WHERE phone_normalized = ? LIMIT 1',
+    [phone],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    confirmedInterest: Boolean(row.confirmed_interest),
+    confirmedUniversity: row.confirmed_university,
+    leadQualified: Boolean(row.lead_qualified),
+  };
+}
+
 async function markConversationSeen(phoneNormalized) {
   const phone = String(phoneNormalized || '').trim();
   if (!phone) return;
@@ -293,6 +313,7 @@ module.exports = {
   logMessage,
   markConversationSeen,
   applyLeadSignals,
+  getConversationByPhone,
   listConversations,
   getConversationMessages,
   getReplyCountsByCampaign,
