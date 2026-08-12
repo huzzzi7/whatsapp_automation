@@ -29,8 +29,14 @@ const rootLevel = DEBUG_LOGS ? 'debug' : 'info';
 const isProduction = process.env.NODE_ENV === 'production';
 const usePrettyConsole = !isProduction && process.stdout.isTTY;
 
-const entryBase = path.basename(process.argv[1] || 'app', '.js');
-const isFileOwner = entryBase === 'server';
+// process.argv[1] is NOT a reliable way to tell processes apart: under PM2 fork mode it can
+// resolve to PM2's own internal launcher (e.g. ".../ProcessContainerFork.js") instead of the
+// actual entry script for EVERY managed process — which silently broke this exact check before
+// (neither process ever matched 'server', so neither ever wrote to disk). Each entry file
+// (server.js, coordinatorWorker.js) now sets process.env.LOG_ROLE before requiring anything else,
+// which this reads instead. The argv guess is kept only as a last-resort fallback.
+const role = process.env.LOG_ROLE || path.basename(process.argv[1] || 'app', '.js');
+const isFileOwner = role === 'server';
 const LOG_COLLECTOR_PORT = Number(process.env.LOG_COLLECTOR_PORT) || 9312;
 
 /**

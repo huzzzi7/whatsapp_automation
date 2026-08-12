@@ -3,6 +3,8 @@
  * Processes 'coordinator_tick' repeatable jobs from followupQueue.
  * Task 3.4
  */
+// Must be set before requiring logger.js (directly or transitively) — see src/utils/logger.js for why.
+process.env.LOG_ROLE = process.env.LOG_ROLE || 'coordinatorWorker';
 const { Worker } = require('bullmq');
 const { bullMqConnection, bullMqSkipVersionCheck } = require('./connection');
 const { tryRunNext } = require('../services/CampaignCoordinator');

@@ -2,6 +2,8 @@
  * Express server for WhatsApp automation UI (Meta Cloud API).
  * Serves frontend/dist, handles POST /api/upload, POST /api/campaign/start, POST /api/webhook/meta.
  */
+// Must be set before requiring logger.js (directly or transitively) — see src/utils/logger.js for why.
+process.env.LOG_ROLE = process.env.LOG_ROLE || 'server';
 require('dotenv').config();
 const { logger } = require('./src/utils/logger');
 const { registerCoordinatorJob } = require('./src/queues/registerCoordinatorJob');

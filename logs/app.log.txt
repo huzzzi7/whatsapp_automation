@@ -1,2 +1,1 @@
-D:\Node\whatsapp\logs\20260513-0000-02-app.log
-D:\Node\whatsapp\logs\20260513-0000-01-app.log
+D:\Node\whatsapp\logs\20260802-0914-01-app.log
