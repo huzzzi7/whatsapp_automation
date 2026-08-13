@@ -182,9 +182,9 @@ async function applyLeadSignals(phoneNormalized, { confirmedInterest, confirmedU
 }
 
 /**
- * @param {{ campaignId?: string|null, deliveryStatus?: string|null, unseenOnly?: boolean, qualifiedOnly?: boolean, page?: number, limit?: number }} opts
+ * @param {{ campaignId?: string|null, deliveryStatus?: string|null, repliedOnly?: boolean, qualifiedOnly?: boolean, page?: number, limit?: number }} opts
  */
-async function listConversations({ campaignId, deliveryStatus, unseenOnly, qualifiedOnly, page = 1, limit = 50 } = {}) {
+async function listConversations({ campaignId, deliveryStatus, repliedOnly, qualifiedOnly, page = 1, limit = 50 } = {}) {
   const lim = Math.max(1, Math.min(200, Math.floor(Number(limit) || 50)));
   const pg = Math.max(1, Math.floor(Number(page) || 1));
   const offset = (pg - 1) * lim;
@@ -196,8 +196,13 @@ async function listConversations({ campaignId, deliveryStatus, unseenOnly, quali
     where.push('c.last_campaign_id = ?');
     params.push(campaignId);
   }
-  if (unseenOnly) {
-    where.push('(c.last_seen_by_admin_at IS NULL OR c.last_seen_by_admin_at < c.last_message_at)');
+  if (repliedOnly) {
+    // At least one inbound message ever, regardless of what happened after (opted out, normal
+    // conversation, etc.) — an opt-out itself is logged as an inbound message (button tap or
+    // keyword), so someone who unsubscribed still counts as "replied".
+    where.push(
+      `EXISTS (SELECT 1 FROM conversation_messages cm WHERE cm.phone_normalized = c.phone_normalized AND cm.direction = 'inbound')`,
+    );
   }
   if (qualifiedOnly) {
     where.push('c.lead_qualified = 1');

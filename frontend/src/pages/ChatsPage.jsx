@@ -99,7 +99,7 @@ export default function ChatsPage() {
   const [campaigns, setCampaigns] = useState([]);
   const [campaignId, setCampaignId] = useState(initialCampaignId);
   const [deliveryStatus, setDeliveryStatus] = useState('');
-  const [unseenOnly, setUnseenOnly] = useState(false);
+  const [repliedOnly, setRepliedOnly] = useState(false);
   const [qualifiedOnly, setQualifiedOnly] = useState(false);
 
   const [conversations, setConversations] = useState([]);
@@ -132,7 +132,7 @@ export default function ChatsPage() {
       const data = await listConversations({
         campaignId,
         deliveryStatus,
-        unseen: unseenOnly,
+        replied: repliedOnly,
         qualified: qualifiedOnly,
         page: 1,
         limit: 100,
@@ -143,7 +143,7 @@ export default function ChatsPage() {
     } finally {
       setConvLoading(false);
     }
-  }, [campaignId, deliveryStatus, unseenOnly, qualifiedOnly]);
+  }, [campaignId, deliveryStatus, repliedOnly, qualifiedOnly]);
 
   useEffect(() => {
     loadConversations();
@@ -254,13 +254,13 @@ export default function ChatsPage() {
             <button
               type="button"
               className={
-                unseenOnly
+                repliedOnly
                   ? 'campaign-users-modal__filter campaign-users-modal__filter--active'
                   : 'campaign-users-modal__filter'
               }
-              onClick={() => setUnseenOnly((v) => !v)}
+              onClick={() => setRepliedOnly((v) => !v)}
             >
-              Unseen
+              Replied
             </button>
             <button
               type="button"

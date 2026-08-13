@@ -820,7 +820,7 @@ app.get('/api/conversations', async (req, res) => {
   try {
     const campaignId = req.query.campaignId ? String(req.query.campaignId).trim() : null;
     const deliveryStatus = req.query.deliveryStatus ? String(req.query.deliveryStatus).trim().toLowerCase() : null;
-    const unseenOnly = String(req.query.unseen || '').toLowerCase() === 'true';
+    const repliedOnly = String(req.query.replied || '').toLowerCase() === 'true';
     const qualifiedOnly = String(req.query.qualified || '').toLowerCase() === 'true';
     const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
     const limitRaw = parseInt(String(req.query.limit || '50'), 10);
@@ -828,7 +828,7 @@ app.get('/api/conversations', async (req, res) => {
     const result = await conversationRepository.listConversations({
       campaignId,
       deliveryStatus,
-      unseenOnly,
+      repliedOnly,
       qualifiedOnly,
       page,
       limit,

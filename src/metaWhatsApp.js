@@ -106,7 +106,11 @@ async function sendTemplate({
     const msg = err.response
       ? `Meta Graph ${err.response.status}: ${JSON.stringify(err.response.data)}`
       : err.message;
-    throw new Error(msg);
+    const wrapped = new Error(msg);
+    // Structured code (e.g. 132015 = template paused) so callers can tell a template-wide
+    // failure from a per-recipient one, instead of string-matching the message.
+    wrapped.metaErrorCode = err.response?.data?.error?.code ?? null;
+    throw wrapped;
   }
 }
 

@@ -7,6 +7,17 @@ const metaWhatsApp = require('../metaWhatsApp');
 const { toMetaRecipient } = require('../phone');
 const { buildComponentsForTemplate } = require('../metaTemplateBuilder');
 
+// Meta error codes confirmed to mean the TEMPLATE itself is unusable right now — every remaining
+// send in the campaign will fail identically, so there's no point recording each one as a
+// separate per-recipient failure and grinding through the whole contact list. Deliberately a
+// short, conservative list of codes actually observed/confirmed, not every 132xxx code Meta has
+// — misclassifying a genuinely per-recipient error as template-fatal would wrongly abort a
+// campaign that could otherwise keep sending to everyone else.
+const TEMPLATE_FATAL_META_ERROR_CODES = new Set([
+  132015, // Template is paused (due to low quality/negative feedback) — confirmed 2026-08-13
+  132001, // Template does not exist (e.g. deleted/renamed after the campaign was configured)
+]);
+
 /**
  * @param {Array<{phone: string, [key: string]: any}>} users
  * @param {{ metaConfig: {phoneNumberId:string, accessToken:string, graphVersion:string}, metaTemplate: {name:string, languageCode:string, variables:string[]} }} ctx
@@ -39,6 +50,13 @@ async function sendMetaTemplateBatch(users, { metaConfig, metaTemplate }) {
       const wamid = res?.messages?.[0]?.id;
       if (wamid) sentMessageIds[phone] = wamid;
     } catch (err) {
+      if (TEMPLATE_FATAL_META_ERROR_CODES.has(err?.metaErrorCode)) {
+        const fatal = new Error(
+          `Template "${metaTemplate.name}" is unusable right now (Meta error ${err.metaErrorCode}): ${err.message}`,
+        );
+        fatal.templateFatal = true;
+        throw fatal;
+      }
       failedSends[phone] = err?.message || 'Meta send failed';
     }
   }

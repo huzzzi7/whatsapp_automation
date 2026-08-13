@@ -302,11 +302,11 @@ export async function deleteUniversityLink(id) {
 }
 
 /** @returns {Promise<{ total: number, conversations: object[], page: number, limit: number }>} */
-export async function listConversations({ campaignId = '', deliveryStatus = '', unseen = false, qualified = false, page = 1, limit = 50 } = {}) {
+export async function listConversations({ campaignId = '', deliveryStatus = '', replied = false, qualified = false, page = 1, limit = 50 } = {}) {
   const q = new URLSearchParams();
   if (campaignId) q.set('campaignId', campaignId);
   if (deliveryStatus) q.set('deliveryStatus', deliveryStatus);
-  if (unseen) q.set('unseen', 'true');
+  if (replied) q.set('replied', 'true');
   if (qualified) q.set('qualified', 'true');
   q.set('page', String(page));
   q.set('limit', String(limit));
