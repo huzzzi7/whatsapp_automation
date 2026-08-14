@@ -34,6 +34,7 @@ const {
   getRunningCampaigns,
   claimQueuedAsRunning,
   claimPausedAsRunning,
+  claimFailedAsRunning,
   getPausedCampaigns,
   getQueuedCampaigns,
   listCampaigns,
@@ -1206,17 +1207,18 @@ app.post('/api/campaign/start', async (req, res) => {
   }
 });
 
-// PATCH /api/campaigns/:id – update schedule on paused campaigns only
+// PATCH /api/campaigns/:id – update schedule; allowed for any non-completed, non-running campaign
+const SCHEDULE_EDITABLE_STATUSES = ['queued', 'paused', 'failed', 'stopped'];
 app.patch('/api/campaigns/:id', async (req, res) => {
   try {
     const c = await getCampaignById(req.params.id);
     if (!c) {
       return res.status(404).json({ ok: false, error: 'Campaign not found.' });
     }
-    if (c.status !== 'paused') {
+    if (!SCHEDULE_EDITABLE_STATUSES.includes(c.status)) {
       return res.status(400).json({
         ok: false,
-        error: 'Schedule can only be updated while the campaign is paused.',
+        error: 'Schedule cannot be updated while the campaign is running or completed.',
       });
     }
 
@@ -1314,19 +1316,23 @@ app.patch('/api/campaigns/:id', async (req, res) => {
 
     const dailyLimitPerInstance = null;
 
-    const affected = await updateCampaignSchedule(c.id, {
-      operationalStart,
-      operationalEnd,
-      operationalDays,
-      campaignStartDate: startDateStr,
-      campaignEndDate: endDateStr,
-      dailyLimitPerInstance,
-    });
+    const affected = await updateCampaignSchedule(
+      c.id,
+      {
+        operationalStart,
+        operationalEnd,
+        operationalDays,
+        campaignStartDate: startDateStr,
+        campaignEndDate: endDateStr,
+        dailyLimitPerInstance,
+      },
+      SCHEDULE_EDITABLE_STATUSES,
+    );
 
     if (affected === 0) {
       return res.status(400).json({
         ok: false,
-        error: 'Schedule update failed (campaign may no longer be paused).',
+        error: 'Schedule update failed (campaign status may have changed).',
       });
     }
 
@@ -1402,6 +1408,32 @@ app.post('/api/campaigns/:id/resume', async (req, res) => {
   } catch (err) {
     console.error('[Campaign resume]', err);
     res.status(500).json({ ok: false, error: err.message || 'Resume failed.' });
+  }
+});
+
+// POST /api/campaigns/:id/retry – failed → running (resumes sending to remaining pending contacts)
+app.post('/api/campaigns/:id/retry', async (req, res) => {
+  try {
+    const c = await getCampaignById(req.params.id);
+    if (!c) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found.' });
+    }
+    if (c.status !== 'failed') {
+      return res.status(400).json({ ok: false, error: 'Only a failed campaign can be retried.' });
+    }
+    const claimed = await claimFailedAsRunning(c.id);
+    if (claimed !== 1) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Could not retry: the campaign is no longer failed.',
+      });
+    }
+    console.log('[Campaign] Failed campaign retried:', c.id);
+    tryRunNext().catch((err) => console.error('[Campaign retry] tryRunNext', err));
+    res.json({ ok: true, status: 'running' });
+  } catch (err) {
+    console.error('[Campaign retry]', err);
+    res.status(500).json({ ok: false, error: err.message || 'Retry failed.' });
   }
 });
 

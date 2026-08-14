@@ -255,6 +255,19 @@ async function claimPausedAsRunning(campaignId) {
   return Number(result.affectedRows) || 0;
 }
 
+/** Re-queues a failed campaign so the coordinator picks it up again; already-sent contacts are untouched. */
+async function claimFailedAsRunning(campaignId) {
+  console.log('[CampaignRepository] Attempting to retry failed campaign:', campaignId);
+  const [result] = await pool.execute(
+    `UPDATE campaigns c
+     SET c.status = 'running', c.error_message = NULL, c.updated_at = CURRENT_TIMESTAMP
+     WHERE c.id = ?
+       AND c.status = 'failed'`,
+    [campaignId],
+  );
+  return Number(result.affectedRows) || 0;
+}
+
 async function getPausedCampaigns() {
   const [rows] = await pool.execute(
     `${CAMPAIGN_SELECT} WHERE c.status = 'paused' ORDER BY c.updated_at DESC`,
@@ -587,7 +600,7 @@ async function getCampaignById(campaignId) {
   return mapCampaignRow(rows[0]);
 }
 
-async function updateCampaignSchedule(campaignId, schedule) {
+async function updateCampaignSchedule(campaignId, schedule, allowedStatuses = ['paused']) {
   const opStart = String(schedule.operationalStart || '').trim().slice(0, 8);
   const opEnd = String(schedule.operationalEnd || '').trim().slice(0, 8);
   const opDays = String(schedule.operationalDays || '').trim().slice(0, 20);
@@ -598,6 +611,11 @@ async function updateCampaignSchedule(campaignId, schedule) {
       ? Math.max(1, Math.floor(Number(schedule.dailyLimitPerInstance)))
       : null;
 
+  const statuses = (Array.isArray(allowedStatuses) ? allowedStatuses : [allowedStatuses])
+    .map((s) => String(s || '').trim())
+    .filter(Boolean);
+  if (statuses.length === 0) return 0;
+
   const values = [opStart, opEnd, opDays, startDate, endDate];
   let sql = `UPDATE campaigns
      SET operational_start = ?, operational_end = ?, operational_days = ?,
@@ -606,8 +624,8 @@ async function updateCampaignSchedule(campaignId, schedule) {
     sql += `, daily_limit_per_instance = ?`;
     values.push(dailyLimit);
   }
-  sql += `, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'paused'`;
-  values.push(campaignId);
+  sql += `, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN (${statuses.map(() => '?').join(',')})`;
+  values.push(campaignId, ...statuses);
 
   const [result] = await pool.execute(sql, values);
   return Number(result.affectedRows) || 0;
@@ -630,6 +648,7 @@ module.exports = {
   getQueuedCampaignsDueOrdered,
   claimQueuedAsRunning,
   claimPausedAsRunning,
+  claimFailedAsRunning,
   getPausedCampaigns,
   getQueuedCampaigns,
   listCampaigns,

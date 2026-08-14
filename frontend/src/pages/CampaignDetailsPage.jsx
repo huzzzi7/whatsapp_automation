@@ -9,6 +9,7 @@ import {
   listCampaignsApi,
   pauseCampaign,
   resumeCampaign,
+  retryCampaign,
   updateCampaignSchedule,
   startQueuedCampaign,
   stopCampaign,
@@ -45,6 +46,14 @@ function toTimeInputValue(t) {
   const m = /^(\d{1,2}):(\d{2})/.exec(String(t).trim());
   if (!m) return '';
   return `${String(Number(m[1])).padStart(2, '0')}:${m[2]}`;
+}
+
+/** ISO date or datetime string → "YYYY-MM-DD" for date inputs. */
+function toDateInputValue(d) {
+  if (d == null) return '';
+  const raw = String(d).trim();
+  if (!raw) return '';
+  return raw.slice(0, 10);
 }
 
 function parseDaysSet(str) {
@@ -311,18 +320,22 @@ function IconNotepad() {
   );
 }
 
-function ViewDetailsButton({ campaignId, onOpen, disabled }) {
+function ViewDetailsButton({ campaignId, onOpen, disabled, iconOnly }) {
   return (
     <button
       type="button"
-      className="campaign-details__icon-btn campaign-details__icon-btn--with-label"
+      className={
+        iconOnly
+          ? 'campaign-details__icon-btn'
+          : 'campaign-details__icon-btn campaign-details__icon-btn--with-label'
+      }
       title="Campaign details"
       aria-label="Campaign details"
       onClick={() => onOpen(campaignId)}
       disabled={disabled}
     >
       <IconNotepad />
-      <span className="campaign-details__btn-details-label">Details</span>
+      {iconOnly ? null : <span className="campaign-details__btn-details-label">Details</span>}
     </button>
   );
 }
@@ -364,6 +377,74 @@ function IconTrash() {
       <path d="M14 11v6" />
       <path d="M9 6V4h6v2" />
     </svg>
+  );
+}
+
+function IconEdit() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </svg>
+  );
+}
+
+function IconRetry() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <polyline points="1 4 1 10 7 10" />
+      <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+    </svg>
+  );
+}
+
+function EditScheduleButton({ campaign, onEdit, disabled }) {
+  return (
+    <button
+      type="button"
+      className="campaign-details__icon-btn"
+      title="Edit schedule"
+      aria-label="Edit schedule"
+      onClick={() => onEdit(campaign)}
+      disabled={disabled}
+    >
+      <IconEdit />
+    </button>
+  );
+}
+
+function RetryButton({ campaign, onRetry, disabled }) {
+  return (
+    <button
+      type="button"
+      className="campaign-details__icon-btn"
+      title="Retry campaign"
+      aria-label="Retry campaign"
+      onClick={() => onRetry(campaign)}
+      disabled={disabled}
+    >
+      <IconRetry />
+    </button>
   );
 }
 
@@ -450,6 +531,7 @@ export default function CampaignDetailsPage() {
   const [detailsError, setDetailsError] = useState('');
   const [expiredModalOpen, setExpiredModalOpen] = useState(false);
   const [expiredCampaignId, setExpiredCampaignId] = useState(null);
+  const [expiredAction, setExpiredAction] = useState('resume'); // 'resume' | 'retry'
   const [expiredSchedule, setExpiredSchedule] = useState({
     operationalStart: '09:00',
     operationalEnd: '21:00',
@@ -459,6 +541,18 @@ export default function CampaignDetailsPage() {
   });
   const [expiredModalStep, setExpiredModalStep] = useState(1);
   const [expiredSaving, setExpiredSaving] = useState(false);
+
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editCampaignId, setEditCampaignId] = useState(null);
+  const [editSchedule, setEditSchedule] = useState({
+    operationalStart: '09:00',
+    operationalEnd: '21:00',
+    operationalDays: '1,2,3,4,5',
+    campaignStartDate: '',
+    campaignEndDate: '',
+  });
+  const [editError, setEditError] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
 
   const handleViewUsers = useCallback((id) => {
     setSelectedCampaignId(id);
@@ -540,17 +634,18 @@ export default function CampaignDetailsPage() {
   }, [shouldPoll, loadActive]);
 
   useEffect(() => {
-    if (!confirmStopId && !confirmDeleteId && !detailsModalOpen) return undefined;
+    if (!confirmStopId && !confirmDeleteId && !detailsModalOpen && !editModalOpen) return undefined;
     const onKey = (e) => {
       if (e.key === 'Escape') {
         setConfirmStopId(null);
         setConfirmDeleteId(null);
         if (detailsModalOpen) handleCloseDetails();
+        if (editModalOpen) handleCloseEdit();
       }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [confirmStopId, confirmDeleteId, detailsModalOpen, handleCloseDetails]);
+  }, [confirmStopId, confirmDeleteId, detailsModalOpen, editModalOpen, handleCloseDetails]);
 
   const runningList = active.runningAll || [];
   const pausedList = active.paused || [];
@@ -581,24 +676,29 @@ export default function CampaignDetailsPage() {
     }
   };
 
+  const openExpiredModalFor = (campaign, action) => {
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    const end = new Date(today);
+    end.setDate(end.getDate() + 7);
+    const newEndDate = end.toISOString().slice(0, 10);
+    setExpiredSchedule({
+      operationalStart: toTimeInputValue(campaign.operationalStart) || '09:00',
+      operationalEnd: toTimeInputValue(campaign.operationalEnd) || '21:00',
+      operationalDays: campaign.operationalDays || '1,2,3,4,5',
+      campaignStartDate: todayStr,
+      campaignEndDate: newEndDate,
+    });
+    setExpiredCampaignId(campaign.id);
+    setExpiredAction(action);
+    setExpiredModalStep(1);
+    setExpiredModalOpen(true);
+  };
+
   const handleResume = async (id) => {
     const campaign = campaigns.find((c) => c.id === id);
     if (campaign && isCampaignExpired(campaign)) {
-      const today = new Date();
-      const todayStr = today.toISOString().slice(0, 10);
-      const end = new Date(today);
-      end.setDate(end.getDate() + 7);
-      const newEndDate = end.toISOString().slice(0, 10);
-      setExpiredSchedule({
-        operationalStart: toTimeInputValue(campaign.operationalStart) || '09:00',
-        operationalEnd: toTimeInputValue(campaign.operationalEnd) || '21:00',
-        operationalDays: campaign.operationalDays || '1,2,3,4,5',
-        campaignStartDate: todayStr,
-        campaignEndDate: newEndDate,
-      });
-      setExpiredCampaignId(id);
-      setExpiredModalStep(1);
-      setExpiredModalOpen(true);
+      openExpiredModalFor(campaign, 'resume');
       return;
     }
     setActionBusy(true);
@@ -608,6 +708,23 @@ export default function CampaignDetailsPage() {
     } catch (e) {
       console.error(e);
       setError(e?.message || 'Resume failed.');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const handleRetry = async (campaign) => {
+    if (isCampaignExpired(campaign)) {
+      openExpiredModalFor(campaign, 'retry');
+      return;
+    }
+    setActionBusy(true);
+    try {
+      await retryCampaign(campaign.id);
+      await loadCampaigns();
+    } catch (e) {
+      console.error(e);
+      setError(e?.message || 'Retry failed.');
     } finally {
       setActionBusy(false);
     }
@@ -623,15 +740,78 @@ export default function CampaignDetailsPage() {
         campaignStartDate: expiredSchedule.campaignStartDate,
         campaignEndDate: expiredSchedule.campaignEndDate,
       });
-      await resumeCampaign(expiredCampaignId);
+      if (expiredAction === 'retry') {
+        await retryCampaign(expiredCampaignId);
+      } else {
+        await resumeCampaign(expiredCampaignId);
+      }
       setExpiredModalOpen(false);
       await loadCampaigns();
     } catch (e) {
       console.error(e);
-      setError(e?.message || 'Failed to update schedule and resume.');
+      setError(e?.message || `Failed to update schedule and ${expiredAction}.`);
     } finally {
       setExpiredSaving(false);
     }
+  };
+
+  const handleOpenEdit = (campaign) => {
+    setEditSchedule({
+      operationalStart: toTimeInputValue(campaign.operationalStart) || '09:00',
+      operationalEnd: toTimeInputValue(campaign.operationalEnd) || '21:00',
+      operationalDays: campaign.operationalDays || '1,2,3,4,5',
+      campaignStartDate: toDateInputValue(campaign.campaignStartDate),
+      campaignEndDate: toDateInputValue(campaign.campaignEndDate),
+    });
+    setEditCampaignId(campaign.id);
+    setEditError('');
+    setEditModalOpen(true);
+  };
+
+  const handleCloseEdit = () => {
+    setEditModalOpen(false);
+    setEditCampaignId(null);
+    setEditError('');
+  };
+
+  const handleEditSave = async () => {
+    setEditSaving(true);
+    setEditError('');
+    try {
+      await updateCampaignSchedule(editCampaignId, {
+        operationalStart: editSchedule.operationalStart,
+        operationalEnd: editSchedule.operationalEnd,
+        operationalDays: editSchedule.operationalDays,
+        campaignStartDate: editSchedule.campaignStartDate,
+        campaignEndDate: editSchedule.campaignEndDate,
+      });
+      handleCloseEdit();
+      await loadCampaigns();
+    } catch (e) {
+      console.error(e);
+      setEditError(e?.message || 'Failed to update schedule.');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const editOperationalDaySet = new Set(
+    String(editSchedule.operationalDays || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+
+  const toggleEditOperationalDay = (dayValue) => {
+    const key = String(dayValue);
+    const next = new Set(editOperationalDaySet);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    const sorted = [...next].map(Number).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+    setEditSchedule((prev) => ({
+      ...prev,
+      operationalDays: sorted.join(','),
+    }));
   };
 
   const expiredOperationalDaySet = new Set(
@@ -913,9 +1093,15 @@ export default function CampaignDetailsPage() {
                       <td>{formatDt(c.completedAt)}</td>
                       <td className="campaign-details__history-actions">
                         <div className="campaign-details__history-actions-inner">
-                          <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} />
+                          <ViewDetailsButton campaignId={c.id} onOpen={handleOpenDetails} disabled={actionBusy} iconOnly />
                           <ViewUsersButton campaignId={c.id} onView={handleViewUsers} />
                           <OpenChatsButton campaignId={c.id} onOpen={handleOpenChats} />
+                          {c.status === 'failed' ? (
+                            <RetryButton campaign={c} onRetry={handleRetry} disabled={actionBusy} />
+                          ) : null}
+                          {c.status !== 'completed' && c.status !== 'running' ? (
+                            <EditScheduleButton campaign={c} onEdit={handleOpenEdit} disabled={actionBusy} />
+                          ) : null}
                           <button
                             type="button"
                             className="btn-delete btn-icon"
@@ -1081,7 +1267,7 @@ export default function CampaignDetailsPage() {
             <div className="modal-body">
               {expiredModalStep === 1 ? (
                 <p>
-                  This campaign has expired. You need to set a new timeline before resuming.
+                  This campaign has expired. You need to set a new timeline before {expiredAction === 'retry' ? 'retrying' : 'resuming'}.
                 </p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
@@ -1198,10 +1384,131 @@ export default function CampaignDetailsPage() {
                     }
                     onClick={() => void handleExpiredResumeSave()}
                   >
-                    {expiredSaving ? 'Saving…' : 'Resume Campaign'}
+                    {expiredSaving ? 'Saving…' : expiredAction === 'retry' ? 'Retry Campaign' : 'Resume Campaign'}
                   </button>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {editModalOpen ? (
+        <div className="modal-overlay" role="presentation" onClick={handleCloseEdit}>
+          <div
+            className="modal-content"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="campaign-edit-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3 id="campaign-edit-modal-title" className="modal-title">
+                Edit schedule
+              </h3>
+              <button type="button" className="modal-close" aria-label="Close" onClick={handleCloseEdit}>
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              {editError ? <div className="alert-error" style={{ marginBottom: '1rem' }}>{editError}</div> : null}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 140px' }}>
+                    <label className="ui-input-label" htmlFor="edit-campaign-start-date">
+                      Campaign Start Date
+                    </label>
+                    <input
+                      id="edit-campaign-start-date"
+                      type="date"
+                      className="ui-input-field"
+                      value={editSchedule.campaignStartDate}
+                      onChange={(e) => {
+                        const nextStart = e.target.value;
+                        setEditSchedule((prev) => {
+                          let nextEnd = prev.campaignEndDate;
+                          if (nextEnd && nextStart > nextEnd) nextEnd = nextStart;
+                          return { ...prev, campaignStartDate: nextStart, campaignEndDate: nextEnd };
+                        });
+                      }}
+                    />
+                  </div>
+                  <div style={{ flex: '1 1 140px' }}>
+                    <label className="ui-input-label" htmlFor="edit-campaign-end-date">
+                      Campaign End Date
+                    </label>
+                    <input
+                      id="edit-campaign-end-date"
+                      type="date"
+                      className="ui-input-field"
+                      min={editSchedule.campaignStartDate || undefined}
+                      value={editSchedule.campaignEndDate}
+                      onChange={(e) => setEditSchedule((prev) => ({ ...prev, campaignEndDate: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 140px' }}>
+                    <label className="ui-input-label" htmlFor="edit-operational-start">
+                      Operational Start Time
+                    </label>
+                    <input
+                      id="edit-operational-start"
+                      type="time"
+                      className="ui-input-field"
+                      value={editSchedule.operationalStart}
+                      onChange={(e) => setEditSchedule((prev) => ({ ...prev, operationalStart: e.target.value }))}
+                    />
+                  </div>
+                  <div style={{ flex: '1 1 140px' }}>
+                    <label className="ui-input-label" htmlFor="edit-operational-end">
+                      Operational End Time
+                    </label>
+                    <input
+                      id="edit-operational-end"
+                      type="time"
+                      className="ui-input-field"
+                      value={editSchedule.operationalEnd}
+                      onChange={(e) => setEditSchedule((prev) => ({ ...prev, operationalEnd: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
+                  <legend className="ui-input-label" style={{ marginBottom: 8 }}>
+                    Operational Days
+                  </legend>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem 1rem' }}>
+                    {EXPIRED_DAY_OPTIONS.map((d) => (
+                      <label key={d.v} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <input
+                          type="checkbox"
+                          checked={editOperationalDaySet.has(String(d.v))}
+                          onChange={() => toggleEditOperationalDay(d.v)}
+                        />
+                        <span>{d.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" className="btn-secondary" onClick={handleCloseEdit}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={
+                  editSaving ||
+                  !editSchedule.campaignStartDate ||
+                  !editSchedule.campaignEndDate ||
+                  editSchedule.campaignEndDate < editSchedule.campaignStartDate
+                }
+                onClick={() => void handleEditSave()}
+              >
+                {editSaving ? 'Saving…' : 'Save changes'}
+              </button>
             </div>
           </div>
         </div>

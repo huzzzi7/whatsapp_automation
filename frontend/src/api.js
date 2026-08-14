@@ -190,6 +190,10 @@ export async function resumeCampaign(id) {
   return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/resume`, { method: 'POST', body: '{}' });
 }
 
+export async function retryCampaign(id) {
+  return apiFetch(`/api/campaigns/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' });
+}
+
 export async function updateCampaignSchedule(id, scheduleData) {
   return apiFetch(`/api/campaigns/${encodeURIComponent(id)}`, {
     method: 'PATCH',
