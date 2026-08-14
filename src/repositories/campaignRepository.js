@@ -610,6 +610,10 @@ async function updateCampaignSchedule(campaignId, schedule, allowedStatuses = ['
     schedule.dailyLimitPerInstance != null && Number.isFinite(Number(schedule.dailyLimitPerInstance))
       ? Math.max(1, Math.floor(Number(schedule.dailyLimitPerInstance)))
       : null;
+  const metaTemplateId =
+    schedule.metaTemplateId != null && Number.isFinite(Number(schedule.metaTemplateId))
+      ? Number(schedule.metaTemplateId)
+      : null;
 
   const statuses = (Array.isArray(allowedStatuses) ? allowedStatuses : [allowedStatuses])
     .map((s) => String(s || '').trim())
@@ -623,6 +627,10 @@ async function updateCampaignSchedule(campaignId, schedule, allowedStatuses = ['
   if (dailyLimit != null) {
     sql += `, daily_limit_per_instance = ?`;
     values.push(dailyLimit);
+  }
+  if (metaTemplateId != null) {
+    sql += `, meta_template_id = ?`;
+    values.push(metaTemplateId);
   }
   sql += `, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN (${statuses.map(() => '?').join(',')})`;
   values.push(campaignId, ...statuses);

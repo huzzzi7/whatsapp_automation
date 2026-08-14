@@ -1229,7 +1229,17 @@ app.patch('/api/campaigns/:id', async (req, res) => {
       operationalDays: rawOperationalDays,
       campaignStartDate: rawCampaignStartDate,
       campaignEndDate: rawCampaignEndDate,
+      metaTemplateId: rawMetaTemplateId,
     } = body;
+
+    let metaTemplateId = null;
+    if (rawMetaTemplateId != null && String(rawMetaTemplateId).trim() !== '') {
+      const template = await metaTemplateRepository.getMetaTemplateById(rawMetaTemplateId);
+      if (!template) {
+        return res.status(400).json({ ok: false, error: 'Selected template was not found.' });
+      }
+      metaTemplateId = template.id;
+    }
 
     if (
       rawOperationalStart == null ||
@@ -1325,6 +1335,7 @@ app.patch('/api/campaigns/:id', async (req, res) => {
         campaignStartDate: startDateStr,
         campaignEndDate: endDateStr,
         dailyLimitPerInstance,
+        metaTemplateId,
       },
       SCHEDULE_EDITABLE_STATUSES,
     );

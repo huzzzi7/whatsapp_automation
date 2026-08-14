@@ -14,6 +14,7 @@ import {
   startQueuedCampaign,
   stopCampaign,
   deleteCampaign,
+  listMetaTemplates,
 } from '../api';
 
 const POLL_MS = 2500;
@@ -550,9 +551,13 @@ export default function CampaignDetailsPage() {
     operationalDays: '1,2,3,4,5',
     campaignStartDate: '',
     campaignEndDate: '',
+    metaTemplateId: '',
   });
   const [editError, setEditError] = useState('');
   const [editSaving, setEditSaving] = useState(false);
+  const [editTemplates, setEditTemplates] = useState([]);
+  const [editTemplatesLoading, setEditTemplatesLoading] = useState(false);
+  const [editTemplatesError, setEditTemplatesError] = useState('');
 
   const handleViewUsers = useCallback((id) => {
     setSelectedCampaignId(id);
@@ -762,10 +767,18 @@ export default function CampaignDetailsPage() {
       operationalDays: campaign.operationalDays || '1,2,3,4,5',
       campaignStartDate: toDateInputValue(campaign.campaignStartDate),
       campaignEndDate: toDateInputValue(campaign.campaignEndDate),
+      metaTemplateId: campaign.metaTemplateId != null ? String(campaign.metaTemplateId) : '',
     });
     setEditCampaignId(campaign.id);
     setEditError('');
     setEditModalOpen(true);
+
+    setEditTemplatesLoading(true);
+    setEditTemplatesError('');
+    listMetaTemplates()
+      .then((list) => setEditTemplates(list))
+      .catch((e) => setEditTemplatesError(e?.message || 'Failed to load templates'))
+      .finally(() => setEditTemplatesLoading(false));
   };
 
   const handleCloseEdit = () => {
@@ -784,6 +797,7 @@ export default function CampaignDetailsPage() {
         operationalDays: editSchedule.operationalDays,
         campaignStartDate: editSchedule.campaignStartDate,
         campaignEndDate: editSchedule.campaignEndDate,
+        metaTemplateId: editSchedule.metaTemplateId,
       });
       handleCloseEdit();
       await loadCampaigns();
@@ -795,6 +809,8 @@ export default function CampaignDetailsPage() {
     }
   };
 
+  const editSelectedTemplate = editTemplates.find((t) => String(t.id) === String(editSchedule.metaTemplateId)) || null;
+
   const editOperationalDaySet = new Set(
     String(editSchedule.operationalDays || '')
       .split(',')
@@ -805,8 +821,12 @@ export default function CampaignDetailsPage() {
   const toggleEditOperationalDay = (dayValue) => {
     const key = String(dayValue);
     const next = new Set(editOperationalDaySet);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
+    if (next.has(key)) {
+      if (next.size <= 1) return;
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
     const sorted = [...next].map(Number).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
     setEditSchedule((prev) => ({
       ...prev,
@@ -824,8 +844,12 @@ export default function CampaignDetailsPage() {
   const toggleExpiredOperationalDay = (dayValue) => {
     const key = String(dayValue);
     const next = new Set(expiredOperationalDaySet);
-    if (next.has(key)) next.delete(key);
-    else next.add(key);
+    if (next.has(key)) {
+      if (next.size <= 1) return;
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
     const sorted = [...next].map(Number).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
     setExpiredSchedule((prev) => ({
       ...prev,
@@ -1338,23 +1362,22 @@ export default function CampaignDetailsPage() {
                       />
                     </div>
                   </div>
-                  <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
-                    <legend className="ui-input-label" style={{ marginBottom: 8 }}>
-                      Operational Days
-                    </legend>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem 1rem' }}>
+                  <div>
+                    <span className="ui-input-label">Operational days</span>
+                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>
                       {EXPIRED_DAY_OPTIONS.map((d) => (
-                        <label key={d.v} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <input
-                            type="checkbox"
-                            checked={expiredOperationalDaySet.has(String(d.v))}
-                            onChange={() => toggleExpiredOperationalDay(d.v)}
-                          />
-                          <span>{d.label}</span>
-                        </label>
+                        <button
+                          key={d.v}
+                          type="button"
+                          onClick={() => toggleExpiredOperationalDay(d.v)}
+                          className={`ui-button--inline ${expiredOperationalDaySet.has(String(d.v)) ? '' : 'ui-button--secondary'}`}
+                          style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}
+                        >
+                          {d.label}
+                        </button>
                       ))}
                     </div>
-                  </fieldset>
+                  </div>
                 </div>
               )}
             </div>
@@ -1404,7 +1427,7 @@ export default function CampaignDetailsPage() {
           >
             <div className="modal-header">
               <h3 id="campaign-edit-modal-title" className="modal-title">
-                Edit schedule
+                Edit campaign
               </h3>
               <button type="button" className="modal-close" aria-label="Close" onClick={handleCloseEdit}>
                 ✕
@@ -1413,6 +1436,41 @@ export default function CampaignDetailsPage() {
             <div className="modal-body">
               {editError ? <div className="alert-error" style={{ marginBottom: '1rem' }}>{editError}</div> : null}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div>
+                  <label className="ui-input-label" htmlFor="edit-campaign-template">
+                    Template
+                  </label>
+                  {editTemplatesLoading ? (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Loading templates…</p>
+                  ) : editTemplatesError ? (
+                    <div className="alert-error">{editTemplatesError}</div>
+                  ) : editTemplates.length === 0 ? (
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                      No templates registered yet — add one on the Settings page.
+                    </p>
+                  ) : (
+                    <select
+                      id="edit-campaign-template"
+                      className="ui-input-field"
+                      value={editSchedule.metaTemplateId}
+                      onChange={(e) => setEditSchedule((prev) => ({ ...prev, metaTemplateId: e.target.value }))}
+                    >
+                      <option value="">Select template…</option>
+                      {editTemplates.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} ({t.languageCode})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {editSelectedTemplate ? (
+                    <p style={{ margin: '0.4rem 0 0', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      {editSelectedTemplate.variables.length > 0
+                        ? `Requires sheet columns: ${editSelectedTemplate.variables.join(', ')}`
+                        : 'No variables required.'}
+                    </p>
+                  ) : null}
+                </div>
                 <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                   <div style={{ flex: '1 1 140px' }}>
                     <label className="ui-input-label" htmlFor="edit-campaign-start-date">
@@ -1473,23 +1531,22 @@ export default function CampaignDetailsPage() {
                     />
                   </div>
                 </div>
-                <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
-                  <legend className="ui-input-label" style={{ marginBottom: 8 }}>
-                    Operational Days
-                  </legend>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem 1rem' }}>
+                <div>
+                  <span className="ui-input-label">Operational days</span>
+                  <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', marginTop: '0.4rem' }}>
                     {EXPIRED_DAY_OPTIONS.map((d) => (
-                      <label key={d.v} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        <input
-                          type="checkbox"
-                          checked={editOperationalDaySet.has(String(d.v))}
-                          onChange={() => toggleEditOperationalDay(d.v)}
-                        />
-                        <span>{d.label}</span>
-                      </label>
+                      <button
+                        key={d.v}
+                        type="button"
+                        onClick={() => toggleEditOperationalDay(d.v)}
+                        className={`ui-button--inline ${editOperationalDaySet.has(String(d.v)) ? '' : 'ui-button--secondary'}`}
+                        style={{ padding: '0.3rem 0.7rem', fontSize: '0.8rem' }}
+                      >
+                        {d.label}
+                      </button>
                     ))}
                   </div>
-                </fieldset>
+                </div>
               </div>
             </div>
             <div className="modal-footer">
@@ -1501,6 +1558,7 @@ export default function CampaignDetailsPage() {
                 className="btn-primary"
                 disabled={
                   editSaving ||
+                  !editSchedule.metaTemplateId ||
                   !editSchedule.campaignStartDate ||
                   !editSchedule.campaignEndDate ||
                   editSchedule.campaignEndDate < editSchedule.campaignStartDate
