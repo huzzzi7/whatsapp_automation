@@ -33,9 +33,16 @@ aiReplyQueue.on('error', (err) => {
   qlog.error({ event: 'queue_error', queue: 'aiReplyQueue', err: err?.message || String(err) }, 'Queue error');
 });
 
+// Delayed "send the ticket link a few minutes after the group link" follow-up.
+const groupFollowupQueue = new Queue('groupFollowupQueue', queueOpts);
+
+groupFollowupQueue.on('error', (err) => {
+  qlog.error({ event: 'queue_error', queue: 'groupFollowupQueue', err: err?.message || String(err) }, 'Queue error');
+});
+
 qlog.info(
-  { event: 'queues_initialized', queues: ['followupQueue', 'aiReplyQueue'] },
+  { event: 'queues_initialized', queues: ['followupQueue', 'aiReplyQueue', 'groupFollowupQueue'] },
   'BullMQ queues initialized',
 );
 
-module.exports = { followupQueue, aiReplyQueue };
+module.exports = { followupQueue, aiReplyQueue, groupFollowupQueue };

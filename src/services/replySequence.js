@@ -14,6 +14,7 @@ const {
 } = require('../repositories/pendingRequestRepository');
 const conversationRepository = require('../repositories/conversationRepository');
 const aiReplyScheduler = require('./aiReplyScheduler');
+const groupFollowupScheduler = require('./groupFollowupScheduler');
 const { classifyReplyIntent } = require('../utils/replyIntent');
 const metaWhatsApp = require('../metaWhatsApp');
 const { parseContactPayload } = require('../utils/contactPayload');
@@ -103,6 +104,22 @@ async function handleReply({ fromPhone, campaignId, messageType, bodyText, butto
         await setPendingUniversityRequest(fromPhone);
         await sendReplyText(fromPhone, ASK_WHICH_UNIVERSITY_TEXT, campaignId);
         log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent }, 'meta_reply_intent');
+        return;
+      }
+
+      if (intent === 'get_group_link') {
+        const payload = parseContactPayload(contactPayloadJson);
+        const groupLink = payload.group != null && String(payload.group).trim() ? String(payload.group).trim() : null;
+        await sendReplyText(fromPhone, groupLink ? universityLinkFoundText(groupLink) : UNIVERSITY_LINK_NOT_FOUND_TEXT, campaignId);
+        await conversationRepository.applyLeadSignals(fromPhone, {
+          confirmedInterest: true,
+          confirmedUniversity: payload.university || null,
+        });
+        if (groupLink) {
+          // Ticket link follows up a few minutes after the group link, not instantly.
+          await groupFollowupScheduler.scheduleTicketFollowup({ fromPhone, campaignId, contactPayloadJson });
+        }
+        log.info({ event: 'meta_reply_intent', fromPhone, campaignId, intent, hasLink: Boolean(groupLink) }, 'meta_reply_intent');
         return;
       }
 

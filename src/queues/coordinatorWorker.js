@@ -9,8 +9,10 @@ const { Worker } = require('bullmq');
 const { bullMqConnection, bullMqSkipVersionCheck } = require('./connection');
 const { tryRunNext } = require('../services/CampaignCoordinator');
 const { createLogger } = require('../utils/logger');
-// Starts the aiReplyQueue consumer in this same process — no separate PM2 process needed.
+// Starts the aiReplyQueue and groupFollowupQueue consumers in this same process — no separate
+// PM2 process needed.
 const { closeAiReplyWorker } = require('./aiReplyWorker');
+const { closeGroupFollowupWorker } = require('./groupFollowupWorker');
 
 const log = createLogger('worker');
 
@@ -41,6 +43,7 @@ log.info({ event: 'coordinator_worker_started', queue: 'followupQueue', concurre
 async function closeCoordinatorWorker() {
   await coordinatorWorker.close();
   await closeAiReplyWorker();
+  await closeGroupFollowupWorker();
   log.info({ event: 'coordinator_worker_closed' }, 'CoordinatorWorker closed');
 }
 
