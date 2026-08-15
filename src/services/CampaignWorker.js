@@ -11,6 +11,7 @@ const {
   incrementSentCount,
   incrementFailedCount,
   updateCampaignStatus,
+  updateCampaignTemplate,
   countPendingContacts,
 } = require('../repositories/campaignRepository');
 const { getMetaConfigRow } = require('../repositories/metaConfigRepository');
@@ -18,6 +19,7 @@ const { getMetaTemplateById } = require('../repositories/metaTemplateRepository'
 const { filterOptedOut } = require('../repositories/optOutRepository');
 const conversationRepository = require('../repositories/conversationRepository');
 const { sendMetaTemplateBatch } = require('./metaCampaignSend');
+const { findReplacementTemplate } = require('./templateFailover');
 const { createLogger } = require('../utils/logger');
 
 function sleepMs(ms) {
@@ -275,10 +277,13 @@ async function runCampaignWorker(campaignId) {
   if (!metaConfig || !metaConfig.isEnabled) {
     throw new Error('Meta config not found or disabled');
   }
-  const metaTemplate = await getMetaTemplateById(campaign.metaTemplateId);
+  let metaTemplate = await getMetaTemplateById(campaign.metaTemplateId);
   if (!metaTemplate) {
     throw new Error(`Meta template not found for campaign: ${campaign.metaTemplateId}`);
   }
+  // Templates this run has already proven unusable (paused/deleted) — never retried even if a
+  // later status check for it flakes back to looking APPROVED, avoiding a switch-back-and-forth loop.
+  const excludedTemplateIds = new Set();
 
   const operationalStart = campaign.operationalStart || process.env.CAMPAIGN_OPERATIONAL_START || '09:00';
   const operationalEnd = campaign.operationalEnd || process.env.CAMPAIGN_OPERATIONAL_END || '21:00';
@@ -443,7 +448,52 @@ async function runCampaignWorker(campaignId) {
 
     const users = contactsToUsers(contacts, campLog);
 
-    const { sentPhoneDigits, failedSends, sentMessageIds } = await sendMetaTemplateBatch(users, { metaConfig, metaTemplate });
+    let sendResult;
+    try {
+      sendResult = await sendMetaTemplateBatch(users, { metaConfig, metaTemplate });
+    } catch (err) {
+      if (!err.templateFatal) throw err;
+
+      excludedTemplateIds.add(String(metaTemplate.id));
+      campLog.warn(
+        { event: 'campaign_template_fatal', templateId: metaTemplate.id, templateName: metaTemplate.name, err: err.message },
+        'Current template is unusable, looking for another active template',
+      );
+
+      const replacement = await findReplacementTemplate({
+        metaConfig,
+        excludeTemplateIds: excludedTemplateIds,
+        samplePayload: users[0] || {},
+      });
+
+      if (replacement) {
+        await updateCampaignTemplate(campaignId, replacement.id);
+        campLog.info(
+          {
+            event: 'campaign_template_switched',
+            fromTemplateId: metaTemplate.id,
+            fromTemplateName: metaTemplate.name,
+            toTemplateId: replacement.id,
+            toTemplateName: replacement.name,
+          },
+          `switched from template "${metaTemplate.name}" to "${replacement.name}"`,
+        );
+        metaTemplate = replacement;
+        // This batch's contacts are still 'pending' (nothing was sent or marked) — the next loop
+        // iteration picks them up again and retries with the new template.
+        continue;
+      }
+
+      await updateCampaignStatus(campaignId, 'paused', {
+        errorMessage: `Template "${metaTemplate.name}" is unusable and no other active, compatible template is available. Add or fix a template, then resume.`,
+      });
+      campLog.warn(
+        { event: 'campaign_paused_no_active_template', lastTemplateId: metaTemplate.id, lastTemplateName: metaTemplate.name },
+        'paused: no active replacement template available',
+      );
+      return;
+    }
+    const { sentPhoneDigits, failedSends, sentMessageIds } = sendResult;
 
     const sentSet = new Set(sentPhoneDigits);
 

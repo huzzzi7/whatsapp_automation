@@ -644,6 +644,17 @@ async function deleteCampaignById(id) {
   return Number(result.affectedRows) || 0;
 }
 
+/** Mid-run template failover (see templateFailover.js) — no status guard, only the owning worker calls this. */
+async function updateCampaignTemplate(campaignId, metaTemplateId) {
+  const templateId = Number(metaTemplateId);
+  if (!Number.isFinite(templateId)) return 0;
+  const [result] = await pool.execute(
+    `UPDATE campaigns SET meta_template_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [templateId, campaignId],
+  );
+  return Number(result.affectedRows) || 0;
+}
+
 module.exports = {
   createCampaign,
   getNextQueueOrder,
@@ -673,6 +684,7 @@ module.exports = {
   updateContactMetaDeliveryStatus,
   getCampaignById,
   updateCampaignSchedule,
+  updateCampaignTemplate,
   countPendingContacts,
   countDeliveredContacts,
   getPendingDeliveredCountsByCampaignIds,

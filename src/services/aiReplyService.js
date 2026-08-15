@@ -139,7 +139,7 @@ async function generateReply({ fromPhone, bodyText, contactPayloadJson }) {
     const completion = await openai.chat.completions.create({
       // OPENAI_MODEL env var overrides this without a redeploy — see the model-name caveat where
       // this was last changed.
-      model: process.env.OPENAI_MODEL || 'gpt-5.4-mini',
+      model: process.env.OPENAI_MODEL || 'gpt-5-nano',
       messages: [
         { role: 'system', content: systemPrompt },
         ...historyMessages,
