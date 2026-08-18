@@ -180,6 +180,11 @@ app.get('/privacy-policy', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'privacy-policy.html'));
 });
 
+// Public, unauthenticated Freshers' pamphlet PDF — shareable link, opens inline in-browser.
+app.get('/freshers-pamphlet.pdf', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'Freshers_University_Applicants_Pamphlet.pdf'));
+});
+
 app.use(express.json({ limit: '5mb' }));
 
 if (process.env.TRUST_PROXY === 'true') {
